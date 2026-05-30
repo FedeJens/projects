@@ -1,0 +1,1978 @@
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local StarterGui = game:GetService("StarterGui")
+local CoreGui = game:GetService("CoreGui")
+local HttpService = game:GetService("HttpService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+
+local LocalPlayer = Players.LocalPlayer
+local Mouse = LocalPlayer:GetMouse()
+local Camera = workspace.CurrentCamera
+
+-- Backend Function States
+local ForceHitActive = false
+local SpoofActive = false
+local RakActive = false
+local DesyncActive = false
+local AutoReloadActive = false
+local CFrameFlyActive = false
+local CFrameSpeedActive = false
+
+-- UI Overlay Text States
+local ForceHitTextEnabled = false
+local SpoofTextEnabled = false
+local RakTextEnabled = false
+local DesyncTextEnabled = false
+
+-- Flight speed variables
+local FlySpeedValue = 50
+local SpeedMultiplierValue = 2
+local CustomFlySpeed = nil
+local CustomSpeedMultiplier = nil
+local speedConnection = nil
+local originalWalkSpeed = 16
+
+-- Flight system variables
+local bodyVelocity = nil
+local bodyGyro = nil
+local flyConnection = nil
+local inputFlags = {forward = false, back = false, left = false, right = false, up = false, down = false}
+
+-- Configuration Keys & Settings
+local ActivationKey = Enum.KeyCode.C
+local MenuToggleKey = Enum.KeyCode.LeftAlt
+local FlyToggleKey = Enum.KeyCode.LeftShift
+local SpeedToggleKey = Enum.KeyCode.LeftControl
+local Config = {
+	SpoofKey = Enum.KeyCode.X,
+	RakKey = Enum.KeyCode.X,
+	DesyncKey = Enum.KeyCode.X,
+	FlySpeed = 50,
+	SpeedMultiplier = 2,
+	X = 1,
+	Y = 1,
+	Z = 1
+}
+
+local IsFiring = false
+local LockedTarget = nil
+local LastTrackedUserId = nil
+local Sleeping = false
+local IsBinding = false
+local BindingTarget = nil 
+local LastReloadAttempt = 0
+local ReloadCooldown = 0.5
+
+-- Configuration Pathing Definitions
+local FolderName = "FazeWare_Configs"
+local FileName = FolderName .. "/default.json"
+
+----------------------------------------------------------------------
+-- Auto Reload Functionality
+----------------------------------------------------------------------
+
+local function SimulateReloadKey()
+	VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.R, false, game)
+	task.wait(0.05)
+	VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.R, false, game)
+end
+
+local function AutoReload()
+	if not AutoReloadActive then return end
+	
+	local currentTime = tick()
+	if currentTime - LastReloadAttempt < ReloadCooldown then
+		return
+	end
+	
+	local Character = LocalPlayer.Character
+	if not Character then return end
+	
+	local Tool = Character:FindFirstChildOfClass("Tool")
+	if not Tool then return end
+	
+	local GunScript = Tool:FindFirstChild("Script")
+	if not GunScript then return end
+	
+	local Ammo = GunScript:FindFirstChild("Ammo") and GunScript.Ammo:FindFirstChild("CLIENT")
+	if not Ammo then return end
+	
+	local BodyEffects = Character:FindFirstChild("BodyEffects")
+	if not BodyEffects then return end
+	
+	local IsReloading = BodyEffects:FindFirstChild("Reloading_CLIENT") and BodyEffects.Reloading_CLIENT.Value == true
+	
+	local CanReload = true
+	if Tool.Name == "[Flintlock]" then
+		local CanReloadValue = GunScript:FindFirstChild("CAN_RELOAD")
+		if CanReloadValue then
+			CanReload = CanReloadValue.Value
+		end
+	end
+	
+	if Ammo.Value <= 0 and not IsReloading and CanReload then
+		LastReloadAttempt = currentTime
+		SimulateReloadKey()
+	end
+end
+
+----------------------------------------------------------------------
+-- Flight Functions (Toggle version)
+----------------------------------------------------------------------
+
+local function GetFlySpeed()
+	if CustomFlySpeed and type(CustomFlySpeed) == "number" then
+		return CustomFlySpeed
+	end
+	return FlySpeedValue or 50
+end
+
+local function GetSpeedMultiplier()
+	if CustomSpeedMultiplier and type(CustomSpeedMultiplier) == "number" then
+		return CustomSpeedMultiplier
+	end
+	return SpeedMultiplierValue or 2
+end
+
+local function startFlying()
+	local character = LocalPlayer.Character
+	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	local humanoid = character and character:FindFirstChild("Humanoid")
+	
+	if not hrp or not humanoid then return end
+	
+	CFrameFlyActive = true
+	
+	-- Create BodyVelocity if it doesn't exist
+	if not bodyVelocity then
+		bodyVelocity = Instance.new("BodyVelocity")
+		bodyVelocity.Velocity = Vector3.new(0, 0, 0)
+		bodyVelocity.MaxForce = Vector3.new(100000, 100000, 100000)
+	end
+	
+	-- Create BodyGyro if it doesn't exist
+	if not bodyGyro then
+		bodyGyro = Instance.new("BodyGyro")
+		bodyGyro.CFrame = hrp.CFrame
+		bodyGyro.MaxTorque = Vector3.new(100000, 100000, 100000)
+	end
+	
+	bodyVelocity.Parent = hrp
+	bodyGyro.Parent = hrp
+	humanoid.PlatformStand = true
+end
+
+local function stopFlying()
+	local character = LocalPlayer.Character
+	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	local humanoid = character and character:FindFirstChild("Humanoid")
+	
+	CFrameFlyActive = false
+	
+	if bodyVelocity then
+		bodyVelocity.Parent = nil
+	end
+	if bodyGyro then
+		bodyGyro.Parent = nil
+	end
+	if humanoid then
+		humanoid.PlatformStand = false
+	end
+end
+
+-- Speed boost function (toggle version)
+local function startSpeed()
+	CFrameSpeedActive = true
+	if speedConnection then
+		speedConnection:Disconnect()
+		speedConnection = nil
+	end
+	
+	speedConnection = RunService.Heartbeat:Connect(function()
+		local character = LocalPlayer.Character
+		local humanoid = character and character:FindFirstChild("Humanoid")
+		
+		if not humanoid or not CFrameSpeedActive then
+			return end
+		
+		if originalWalkSpeed == 16 then
+			originalWalkSpeed = humanoid.WalkSpeed
+		end
+		
+		local speedMult = GetSpeedMultiplier()
+		humanoid.WalkSpeed = originalWalkSpeed * speedMult
+	end)
+end
+
+local function stopSpeed()
+	CFrameSpeedActive = false
+	if speedConnection then
+		speedConnection:Disconnect()
+		speedConnection = nil
+	end
+	local character = LocalPlayer.Character
+	local humanoid = character and character:FindFirstChild("Humanoid")
+	if humanoid and originalWalkSpeed then
+		humanoid.WalkSpeed = originalWalkSpeed
+	end
+end
+
+-- Toggle functions
+local function toggleFly()
+	if CFrameFlyActive then
+		stopFlying()
+	else
+		startFlying()
+	end
+	-- Update UI toggle button colors
+	FlyToggleBox.BackgroundColor3 = CFrameFlyActive and Color3.fromRGB(215, 60, 60) or Color3.fromRGB(22, 22, 22)
+	FlyToggleLabel.TextColor3 = CFrameFlyActive and Color3.fromRGB(230, 230, 230) or Color3.fromRGB(145, 145, 145)
+end
+
+local function toggleSpeed()
+	if CFrameSpeedActive then
+		stopSpeed()
+	else
+		startSpeed()
+	end
+	SpeedToggleBox.BackgroundColor3 = CFrameSpeedActive and Color3.fromRGB(215, 60, 60) or Color3.fromRGB(22, 22, 22)
+	SpeedToggleLabel.TextColor3 = CFrameSpeedActive and Color3.fromRGB(230, 230, 230) or Color3.fromRGB(145, 145, 145)
+end
+
+----------------------------------------------------------------------
+-- Core Cheat Environment Setup
+----------------------------------------------------------------------
+
+local BeamFolder = Instance.new("Folder")
+BeamFolder.Name = "BeamFolder"
+BeamFolder.Parent = workspace
+
+local BeamPartA = Instance.new("Part")
+local BeamPartB = Instance.new("Part")
+for _, part in ipairs({BeamPartA, BeamPartB}) do
+	part.Anchored = true
+	part.CanCollide = false
+	part.CanQuery = false
+	part.CastShadow = false
+	part.Transparency = 1
+	part.Size = Vector3.new(0.1, 0.1, 0.1)
+	part.Parent = BeamFolder
+end
+
+local AttachmentA = Instance.new("Attachment", BeamPartA)
+local AttachmentB = Instance.new("Attachment", BeamPartB)
+
+local Beam = Instance.new("Beam")
+Beam.Attachment0 = AttachmentA
+Beam.Attachment1 = AttachmentB
+Beam.Color = ColorSequence.new(Color3.fromRGB(215, 60, 60))
+Beam.Width0 = 0.12
+Beam.Width1 = 0.12
+Beam.FaceCamera = true
+Beam.Segments = 1
+Beam.LightEmission = 0.6
+Beam.LightInfluence = 0.2
+Beam.Transparency = NumberSequence.new(0)
+Beam.Enabled = false
+Beam.Parent = BeamPartA
+
+local ScreenGuiHUD = Instance.new("ScreenGui")
+ScreenGuiHUD.Name = "AimHUD"
+ScreenGuiHUD.ResetOnSpawn = false
+ScreenGuiHUD.Parent = LocalPlayer.PlayerGui
+
+local HUDFrame = Instance.new("Frame")
+HUDFrame.Size = UDim2.new(0, 260, 0, 95)
+HUDFrame.Position = UDim2.new(0.5, -130, 0.85, 0)
+HUDFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+HUDFrame.BackgroundTransparency = 0.2
+HUDFrame.BorderSizePixel = 0
+HUDFrame.Visible = false
+HUDFrame.Parent = ScreenGuiHUD
+
+local UICornerHUD = Instance.new("UICorner")
+UICornerHUD.CornerRadius = UDim.new(0, 12)
+UICornerHUD.Parent = HUDFrame
+
+local AvatarFrame = Instance.new("Frame")
+AvatarFrame.Size = UDim2.new(0, 63, 0, 63)
+AvatarFrame.Position = UDim2.new(0, 10, 0.5, -35)
+AvatarFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+AvatarFrame.BorderSizePixel = 0
+AvatarFrame.Parent = HUDFrame
+
+local AvatarCorner = Instance.new("UICorner")
+AvatarCorner.CornerRadius = UDim.new(0, 8)
+AvatarCorner.Parent = AvatarFrame
+
+local AvatarImage = Instance.new("ImageLabel")
+AvatarImage.Size = UDim2.new(1, 0, 1, 0)
+AvatarImage.BackgroundTransparency = 1
+AvatarImage.Image = ""
+AvatarImage.Parent = AvatarFrame
+
+local AvatarImageCorner = Instance.new("UICorner")
+AvatarImageCorner.CornerRadius = UDim.new(0, 8)
+AvatarImageCorner.Parent = AvatarImage
+
+local InfoLabel = Instance.new("TextLabel")
+InfoLabel.Size = UDim2.new(0, 160, 0, 16)
+InfoLabel.Position = UDim2.new(0, 83, 0, 10)
+InfoLabel.BackgroundTransparency = 1
+InfoLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
+InfoLabel.TextSize = 11
+InfoLabel.Font = Enum.Font.SourceSansBold
+InfoLabel.TextXAlignment = Enum.TextXAlignment.Left
+InfoLabel.Text = "INFO"
+InfoLabel.Parent = HUDFrame
+
+local NameLabel = Instance.new("TextLabel")
+NameLabel.Size = UDim2.new(0, 165, 0, 18)
+NameLabel.Position = UDim2.new(0, 83, 0, 26)
+NameLabel.BackgroundTransparency = 1
+NameLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+NameLabel.TextSize = 13
+NameLabel.Font = Enum.Font.SourceSansBold
+NameLabel.TextXAlignment = Enum.TextXAlignment.Left
+NameLabel.Text = "No Target"
+NameLabel.Parent = HUDFrame
+
+local DistanceLabel = Instance.new("TextLabel")
+DistanceLabel.Size = UDim2.new(0, 165, 0, 16)
+DistanceLabel.Position = UDim2.new(0, 83, 0, 46)
+DistanceLabel.BackgroundTransparency = 1
+DistanceLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+DistanceLabel.TextSize = 12
+DistanceLabel.Font = Enum.Font.SourceSans
+DistanceLabel.TextXAlignment = Enum.TextXAlignment.Left
+DistanceLabel.Text = ""
+DistanceLabel.Parent = HUDFrame
+
+local HealthBarBG = Instance.new("Frame")
+HealthBarBG.Size = UDim2.new(1, -20, 0, 8)
+HealthBarBG.Position = UDim2.new(0, 10, 1, -18)
+HealthBarBG.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+HealthBarBG.BorderSizePixel = 0
+HealthBarBG.Parent = HUDFrame
+
+local HealthBarBGCorner = Instance.new("UICorner")
+HealthBarBGCorner.CornerRadius = UDim.new(1, 0)
+HealthBarBGCorner.Parent = HealthBarBG
+
+local HealthBar = Instance.new("Frame")
+HealthBar.Size = UDim2.new(1, 0, 1, 0)
+HealthBar.BackgroundColor3 = Color3.fromRGB(80, 200, 100)
+HealthBar.BorderSizePixel = 0
+HealthBar.Parent = HealthBarBG
+
+local HealthBarCorner = Instance.new("UICorner")
+HealthBarCorner.CornerRadius = UDim.new(1, 0)
+HealthBarCorner.Parent = HealthBar
+
+-- Combined Status Overlay Setup
+local CombinedStatusGui = Instance.new("ScreenGui")
+CombinedStatusGui.Name = "CombinedStatusGui"
+CombinedStatusGui.ResetOnSpawn = false
+CombinedStatusGui.Parent = CoreGui
+
+local StatusFrame = Instance.new("Frame")
+StatusFrame.BackgroundTransparency = 1
+StatusFrame.Position = UDim2.new(0, 10, 0, 10)
+StatusFrame.Size = UDim2.new(0, 250, 0, 75)
+StatusFrame.Parent = CombinedStatusGui
+
+local function CreateStatusLabel(posY)
+	local Label = Instance.new("TextLabel")
+	local textStroke = Instance.new("UIStroke")
+	Label.BackgroundTransparency = 1
+	Label.Position = UDim2.new(0, 0, posY, 0)
+	Label.Size = UDim2.new(1, 0, 0.33, 0)
+	Label.Font = Enum.Font.GothamBold
+	Label.TextColor3 = Color3.new(1, 1, 1)
+	Label.TextXAlignment = Enum.TextXAlignment.Left
+	Label.TextSize = 14
+	textStroke.Thickness = 1
+	textStroke.Color = Color3.new(0, 0, 0)
+	textStroke.Parent = Label
+	Label.Parent = StatusFrame
+	return Label
+end
+
+local SpoofLabel = CreateStatusLabel(0)
+local RakLabel = CreateStatusLabel(0.33)
+local DesyncLabel = CreateStatusLabel(0.66)
+
+local function UpdateLabels()
+	SpoofLabel.Text = SpoofTextEnabled and ("spoof: " .. (SpoofActive and "active" or "inactive")) or ""
+	RakLabel.Text = RakTextEnabled and ("raknet: " .. (RakActive and "active" or "inactive")) or ""
+	DesyncLabel.Text = DesyncTextEnabled and ("desync: " .. (DesyncActive and "active" or "inactive")) or ""
+end
+
+UpdateLabels()
+
+----------------------------------------------------------------------
+-- Base Framework UI Generation
+----------------------------------------------------------------------
+
+local FazeWare = Instance.new("ScreenGui")
+local Frame = Instance.new("Frame")
+local UICorner = Instance.new("UICorner")
+local Frame_2 = Instance.new("Frame")
+local UICorner_2 = Instance.new("UICorner")
+local Frame_3 = Instance.new("Frame")
+local Frame_4 = Instance.new("Frame")
+local Frame_5 = Instance.new("Frame")
+local Frame_6 = Instance.new("Frame")
+local TextLabel = Instance.new("TextLabel")
+local CloseButton = Instance.new("TextButton")
+local UICorner_3 = Instance.new("UICorner")
+local Minimizebutton = Instance.new("TextButton")
+local UICorner_4 = Instance.new("UICorner")
+local Fullscreenbutton = Instance.new("TextButton")
+local UICorner_5 = Instance.new("UICorner")
+local Frame_7 = Instance.new("Frame")
+local UICorner_6 = Instance.new("UICorner")
+local TextButton = Instance.new("TextButton")
+local Frame_8 = Instance.new("Frame")
+local TextButton_2 = Instance.new("TextButton")
+local TextButton_3 = Instance.new("TextButton")
+local TextButton_4 = Instance.new("TextButton")
+local Frame_9 = Instance.new("Frame")
+local TextButton_5 = Instance.new("TextButton")
+local TextButton_6 = Instance.new("TextButton")
+local Frame_10 = Instance.new("Frame")
+local TextButton_7 = Instance.new("TextButton")
+local TextButton_8 = Instance.new("TextButton")
+local TextButton_9 = Instance.new("TextButton")
+local TextButton_10 = Instance.new("TextButton")
+local Frame_11 = Instance.new("Frame")
+local Frame_12 = Instance.new("Frame")
+local TextLabel_2 = Instance.new("TextLabel")
+local Frame_13 = Instance.new("Frame")
+local Frame_14 = Instance.new("Frame")
+local TextLabel_3 = Instance.new("TextLabel")
+local Frame_15 = Instance.new("Frame")
+local Frame_16 = Instance.new("Frame")
+local TextLabel_4 = Instance.new("TextLabel")
+
+FazeWare.Name = "FazeWare"
+FazeWare.Parent = LocalPlayer:WaitForChild("PlayerGui")
+FazeWare.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+FazeWare.ResetOnSpawn = false
+
+Frame.Parent = FazeWare
+Frame.BackgroundColor3 = Color3.new(0.0509804, 0.0509804, 0.0509804)
+Frame.BorderSizePixel = 0
+Frame.Position = UDim2.new(0.5, -310, 0.5, -250)
+Frame.Size = UDim2.new(0, 620, 0, 500)
+
+UICorner.Parent = Frame
+UICorner.CornerRadius = UDim.new(0, 14)
+
+Frame_2.Name = "TopBar"
+Frame_2.Parent = Frame
+Frame_2.BackgroundColor3 = Color3.new(0.0784314, 0.0784314, 0.0784314)
+Frame_2.BorderSizePixel = 0
+Frame_2.Size = UDim2.new(1, 0, 0, 32)
+
+UICorner_2.Parent = Frame_2
+UICorner_2.CornerRadius = UDim.new(0, 6)
+
+Frame_3.Parent = Frame_2
+Frame_3.BackgroundTransparency = 1
+Frame_3.BorderSizePixel = 0
+Frame_3.Position = UDim2.new(0, 7, 0, 6)
+Frame_3.Size = UDim2.new(0, 20, 0, 20)
+
+Frame_4.Parent = Frame_3
+Frame_4.BackgroundColor3 = Color3.new(0.607843, 0.0862745, 0.0862745)
+Frame_4.BorderSizePixel = 0
+Frame_4.Size = UDim2.new(0, 20, 0, 4)
+
+Frame_5.Parent = Frame_3
+Frame_5.BackgroundColor3 = Color3.new(0.607843, 0.0862745, 0.0862745)
+Frame_5.BorderSizePixel = 0
+Frame_5.Size = UDim2.new(0, 4, 0, 20)
+
+Frame_6.Parent = Frame_3
+Frame_6.BackgroundColor3 = Color3.new(0.607843, 0.0862745, 0.0862745)
+Frame_6.BorderSizePixel = 0
+Frame_6.Position = UDim2.new(0, 0, 0, 8)
+Frame_6.Size = UDim2.new(0, 13, 0, 4)
+
+TextLabel.Parent = Frame_2
+TextLabel.BackgroundTransparency = 1
+TextLabel.Position = UDim2.new(0, 22, 0, 2)
+TextLabel.Size = UDim2.new(0.0274193417, 100, 1, 0)
+TextLabel.Font = Enum.Font.SourceSansBold
+TextLabel.Text = "azeWare"
+TextLabel.TextColor3 = Color3.new(0.607843, 0.0862745, 0.0862745)
+TextLabel.TextSize = 19
+TextLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+CloseButton.Name = "CloseButton"
+CloseButton.Parent = Frame_2
+CloseButton.BackgroundColor3 = Color3.new(0.509804, 0.0705882, 0.0705882)
+CloseButton.BorderSizePixel = 0
+CloseButton.Position = UDim2.new(1, -24, 0.5, -9)
+CloseButton.Size = UDim2.new(0, 18, 0, 18)
+CloseButton.Font = Enum.Font.SourceSansBold
+CloseButton.Text = ""
+CloseButton.TextSize = 12
+
+UICorner_3.Parent = CloseButton
+UICorner_3.CornerRadius = UDim.new(1, 0)
+
+Minimizebutton.Name = "Minimizebutton"
+Minimizebutton.Parent = Frame_2
+Minimizebutton.BackgroundColor3 = Color3.new(0.196078, 0.196078, 0.196078)
+Minimizebutton.BorderSizePixel = 0
+Minimizebutton.Position = UDim2.new(1, -46, 0.5, -9)
+Minimizebutton.Size = UDim2.new(0, 18, 0, 18)
+Minimizebutton.Font = Enum.Font.SourceSansBold
+Minimizebutton.Text = ""
+Minimizebutton.TextSize = 12
+
+UICorner_4.Parent = Minimizebutton
+UICorner_4.CornerRadius = UDim.new(1, 0)
+
+Fullscreenbutton.Name = "Fullscreenbutton"
+Fullscreenbutton.Parent = Frame_2
+Fullscreenbutton.BackgroundColor3 = Color3.new(0.14902, 0.14902, 0.14902)
+Fullscreenbutton.BorderSizePixel = 0
+Fullscreenbutton.Position = UDim2.new(1, -68, 0.5, -9)
+Fullscreenbutton.Size = UDim2.new(0, 18, 0, 18)
+Fullscreenbutton.Font = Enum.Font.SourceSansBold
+Fullscreenbutton.Text = ""
+Fullscreenbutton.TextSize = 12
+
+UICorner_5.Parent = Fullscreenbutton
+UICorner_5.CornerRadius = UDim.new(1, 0)
+
+Frame_7.Parent = Frame
+Frame_7.BackgroundColor3 = Color3.new(0.0705882, 0.0705882, 0.0705882)
+Frame_7.BorderSizePixel = 0
+Frame_7.Position = UDim2.new(0, 0, 0, 32)
+Frame_7.Size = UDim2.new(0, 72, 1, -32)
+
+UICorner_6.Parent = Frame_7
+
+TextButton.Parent = Frame_7
+TextButton.BackgroundTransparency = 1
+TextButton.BorderSizePixel = 0
+TextButton.Position = UDim2.new(0, 7, 0, 10)
+TextButton.Size = UDim2.new(1, -7, 0, 18)
+TextButton.Font = Enum.Font.SourceSansBold
+TextButton.Text = "main"
+TextButton.TextColor3 = Color3.new(0.607843, 0.0862745, 0.0862745)
+TextButton.TextSize = 12
+TextButton.TextXAlignment = Enum.TextXAlignment.Left
+
+Frame_8.Parent = Frame_7
+Frame_8.BackgroundColor3 = Color3.new(0.509804, 0.0705882, 0.0705882)
+Frame_8.BorderSizePixel = 0
+Frame_8.Position = UDim2.new(0, 5, 0, 31)
+Frame_8.Size = UDim2.new(1, -10, 0, 1)
+
+TextButton_2.Parent = Frame_7
+TextButton_2.BackgroundTransparency = 1
+TextButton_2.BorderSizePixel = 0
+TextButton_2.Position = UDim2.new(0, 12, 0, 36)
+TextButton_2.Size = UDim2.new(1, -12, 0, 18)
+TextButton_2.Font = Enum.Font.SourceSans
+TextButton_2.Text = "ragebot"
+TextButton_2.TextColor3 = Color3.new(0.372549, 0.352941, 0.352941)
+TextButton_2.TextSize = 11
+TextButton_2.TextXAlignment = Enum.TextXAlignment.Left
+
+TextButton_3.Parent = Frame_7
+TextButton_3.BackgroundTransparency = 1
+TextButton_3.BorderSizePixel = 0
+TextButton_3.Position = UDim2.new(0, 12, 0, 55)
+TextButton_3.Size = UDim2.new(1, -12, 0, 18)
+TextButton_3.Font = Enum.Font.SourceSans
+TextButton_3.Text = "legitbot"
+TextButton_3.TextColor3 = Color3.new(0.372549, 0.352941, 0.352941)
+TextButton_3.TextSize = 11
+TextButton_3.TextXAlignment = Enum.TextXAlignment.Left
+
+TextButton_4.Parent = Frame_7
+TextButton_4.BackgroundTransparency = 1
+TextButton_4.BorderSizePixel = 0
+TextButton_4.Position = UDim2.new(0, 7, 0, 83)
+TextButton_4.Size = UDim2.new(1, -7, 0, 18)
+TextButton_4.Font = Enum.Font.SourceSansBold
+TextButton_4.Text = "visuals"
+TextButton_4.TextColor3 = Color3.new(0.607843, 0.0862745, 0.0862745)
+TextButton_4.TextSize = 12
+TextButton_4.TextXAlignment = Enum.TextXAlignment.Left
+
+Frame_9.Parent = Frame_7
+Frame_9.BackgroundColor3 = Color3.new(0.509804, 0.0705882, 0.0705882)
+Frame_9.BorderSizePixel = 0
+Frame_9.Position = UDim2.new(0, 5, 0, 104)
+Frame_9.Size = UDim2.new(1, -10, 0, 1)
+
+TextButton_5.Parent = Frame_7
+TextButton_5.BackgroundTransparency = 1
+TextButton_5.BorderSizePixel = 0
+TextButton_5.Position = UDim2.new(0, 12, 0, 109)
+TextButton_5.Size = UDim2.new(1, -12, 0, 18)
+TextButton_5.Font = Enum.Font.SourceSans
+TextButton_5.Text = "players"
+TextButton_5.TextColor3 = Color3.new(0.372549, 0.352941, 0.352941)
+TextButton_5.TextSize = 11
+TextButton_5.TextXAlignment = Enum.TextXAlignment.Left
+
+TextButton_6.Parent = Frame_7
+TextButton_6.BackgroundTransparency = 1
+TextButton_6.BorderSizePixel = 0
+TextButton_6.Position = UDim2.new(0, 7, 0, 137)
+TextButton_6.Size = UDim2.new(1, -7, 0, 18)
+TextButton_6.Font = Enum.Font.SourceSansBold
+TextButton_6.Text = "misc"
+TextButton_6.TextColor3 = Color3.new(0.607843, 0.0862745, 0.0862745)
+TextButton_6.TextSize = 12
+TextButton_6.TextXAlignment = Enum.TextXAlignment.Left
+
+Frame_10.Parent = Frame_7
+Frame_10.BackgroundColor3 = Color3.new(0.509804, 0.0705882, 0.0705882)
+Frame_10.BorderSizePixel = 0
+Frame_10.Position = UDim2.new(0, 5, 0, 158)
+Frame_10.Size = UDim2.new(1, -10, 0, 1)
+
+TextButton_7.Parent = Frame_7
+TextButton_7.BackgroundTransparency = 1
+TextButton_7.BorderSizePixel = 0
+TextButton_7.Position = UDim2.new(0, 12, 0, 163)
+TextButton_7.Size = UDim2.new(1, -12, 0, 18)
+TextButton_7.Font = Enum.Font.SourceSans
+TextButton_7.Text = "main"
+TextButton_7.TextColor3 = Color3.new(0.372549, 0.352941, 0.352941)
+TextButton_7.TextSize = 11
+TextButton_7.TextXAlignment = Enum.TextXAlignment.Left
+
+TextButton_8.Parent = Frame_7
+TextButton_8.BackgroundTransparency = 1
+TextButton_8.BorderSizePixel = 0
+TextButton_8.Position = UDim2.new(0, 12, 0, 182)
+TextButton_8.Size = UDim2.new(1, -12, 0, 18)
+TextButton_8.Font = Enum.Font.SourceSans
+TextButton_8.Text = "players"
+TextButton_8.TextColor3 = Color3.new(0.372549, 0.352941, 0.352941)
+TextButton_8.TextSize = 11
+TextButton_8.TextXAlignment = Enum.TextXAlignment.Left
+
+TextButton_9.Parent = Frame_7
+TextButton_9.BackgroundTransparency = 1
+TextButton_9.BorderSizePixel = 0
+TextButton_9.Position = UDim2.new(0, 12, 0, 201)
+TextButton_9.Size = UDim2.new(1, -12, 0, 18)
+TextButton_9.Font = Enum.Font.SourceSans
+TextButton_9.Text = "configs"
+TextButton_9.TextColor3 = Color3.new(0.372549, 0.352941, 0.352941)
+TextButton_9.TextSize = 11
+TextButton_9.TextXAlignment = Enum.TextXAlignment.Left
+
+TextButton_10.Parent = Frame_7
+TextButton_10.BackgroundTransparency = 1
+TextButton_10.BorderSizePixel = 0
+TextButton_10.Position = UDim2.new(0, 12, 0, 220)
+TextButton_10.Size = UDim2.new(1, -12, 0, 18)
+TextButton_10.Font = Enum.Font.SourceSans
+TextButton_10.Text = "settings"
+TextButton_10.TextColor3 = Color3.new(0.372549, 0.352941, 0.352941)
+TextButton_10.TextSize = 11
+TextButton_10.TextXAlignment = Enum.TextXAlignment.Left
+
+-- Container Pages Setup
+Frame_11.Parent = Frame
+Frame_11.BackgroundTransparency = 1
+Frame_11.BorderSizePixel = 0
+Frame_11.ClipsDescendants = true
+Frame_11.Position = UDim2.new(0, 76, 0, 34)
+Frame_11.Size = UDim2.new(1, -80, 1, -36)
+Frame_11.Visible = false
+
+Frame_12.Parent = Frame_11
+Frame_12.BackgroundTransparency = 1
+Frame_12.BorderSizePixel = 0
+Frame_12.Size = UDim2.new(1, 0, 0, 2000)
+
+TextLabel_2.Parent = Frame_12
+TextLabel_2.BackgroundTransparency = 1
+TextLabel_2.Position = UDim2.new(0, 2, 0, 4)
+TextLabel_2.Size = UDim2.new(1, 0, 0, 16)
+TextLabel_2.Font = Enum.Font.SourceSansBold
+TextLabel_2.Text = "— main"
+TextLabel_2.TextColor3 = Color3.new(0.607843, 0.0862745, 0.0862745)
+TextLabel_2.TextSize = 11
+TextLabel_2.TextXAlignment = Enum.TextXAlignment.Left
+
+Frame_13.Parent = Frame
+Frame_13.BackgroundTransparency = 1
+Frame_13.BorderSizePixel = 0
+Frame_13.ClipsDescendants = true
+Frame_13.Position = UDim2.new(0, 76, 0, 34)
+Frame_13.Size = UDim2.new(1, -80, 1, -36)
+Frame_13.Visible = false
+
+Frame_14.Parent = Frame_13
+Frame_14.BackgroundTransparency = 1
+Frame_14.BorderSizePixel = 0
+Frame_14.Size = UDim2.new(1, 0, 0, 2000)
+
+TextLabel_3.Parent = Frame_14
+TextLabel_3.BackgroundTransparency = 1
+TextLabel_3.Position = UDim2.new(0, 2, 0, 4)
+TextLabel_3.Size = UDim2.new(1, 0, 0, 16)
+TextLabel_3.Font = Enum.Font.SourceSansBold
+TextLabel_3.Text = "— visuals"
+TextLabel_3.TextColor3 = Color3.new(0.607843, 0.0862745, 0.0862745)
+TextLabel_3.TextSize = 11
+TextLabel_3.TextXAlignment = Enum.TextXAlignment.Left
+
+Frame_15.Parent = Frame
+Frame_15.BackgroundTransparency = 1
+Frame_15.BorderSizePixel = 0
+Frame_15.ClipsDescendants = true
+Frame_15.Position = UDim2.new(0, 76, 0, 34)
+Frame_15.Size = UDim2.new(1, -80, 1, -36)
+Frame_15.Visible = false
+
+Frame_16.Parent = Frame_15
+Frame_16.BackgroundTransparency = 1
+Frame_16.BorderSizePixel = 0
+Frame_16.Size = UDim2.new(1, 0, 0, 2000)
+
+TextLabel_4.Parent = Frame_16
+TextLabel_4.BackgroundTransparency = 1
+TextLabel_4.Position = UDim2.new(0, 2, 0, 4)
+TextLabel_4.Size = UDim2.new(1, 0, 0, 16)
+TextLabel_4.Font = Enum.Font.SourceSansBold
+TextLabel_4.Text = "— misc"
+TextLabel_4.TextColor3 = Color3.new(0.607843, 0.0862745, 0.0862745)
+TextLabel_4.TextSize = 11
+TextLabel_4.TextXAlignment = Enum.TextXAlignment.Left
+
+----------------------------------------------------------------------
+-- Draggable UI
+----------------------------------------------------------------------
+
+local dragging
+local dragInput
+local dragStart
+local startPos
+
+local function update(input)
+	local delta = input.Position - dragStart
+	Frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+end
+
+Frame_2.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		dragging = true
+		dragStart = input.Position
+		startPos = Frame.Position
+
+		input.Changed:Connect(function()
+			if input.UserInputState == Enum.UserInputState.End then
+				dragging = false
+			end
+		end)
+	end
+end)
+
+Frame_2.InputChanged:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+		dragInput = input
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+	if input == dragInput and dragging then
+		update(input)
+	end
+end)
+
+----------------------------------------------------------------------
+-- Section 1: "rage"
+----------------------------------------------------------------------
+
+local RageGroupbox = Instance.new("Frame")
+RageGroupbox.Name = "RageGroupbox"
+RageGroupbox.Parent = Frame_12
+RageGroupbox.BackgroundColor3 = Color3.fromRGB(13, 13, 13)
+RageGroupbox.BorderSizePixel = 0
+RageGroupbox.Position = UDim2.new(0, 12, 0, 35)
+RageGroupbox.Size = UDim2.new(0, 240, 0, 380)
+
+local GroupboxCorner = Instance.new("UICorner")
+GroupboxCorner.CornerRadius = UDim.new(0, 8)
+GroupboxCorner.Parent = RageGroupbox
+
+local TopLine = Instance.new("Frame")
+TopLine.Name = "TopLine"
+TopLine.Parent = RageGroupbox
+TopLine.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+TopLine.BorderSizePixel = 0
+TopLine.Position = UDim2.new(0, 10, 0, 0)
+TopLine.Size = UDim2.new(1, -20, 0, 1)
+
+local GroupboxTitle = Instance.new("TextLabel")
+GroupboxTitle.Name = "GroupboxTitle"
+GroupboxTitle.Parent = RageGroupbox
+GroupboxTitle.BackgroundTransparency = 1
+GroupboxTitle.Position = UDim2.new(0, 12, 0, 6)
+GroupboxTitle.Size = UDim2.new(0, 100, 0, 14)
+GroupboxTitle.Font = Enum.Font.SourceSans
+GroupboxTitle.Text = "rage"
+GroupboxTitle.TextColor3 = Color3.fromRGB(200, 200, 200)
+GroupboxTitle.TextSize = 12
+GroupboxTitle.TextXAlignment = Enum.TextXAlignment.Left
+
+-- Force Hit Checkbox
+local ToggleRow = Instance.new("Frame")
+ToggleRow.Name = "ToggleRow"
+ToggleRow.Parent = RageGroupbox
+ToggleRow.BackgroundTransparency = 1
+ToggleRow.Position = UDim2.new(0, 12, 0, 28)
+ToggleRow.Size = UDim2.new(1, -24, 0, 20)
+
+local CheckboxBox = Instance.new("TextButton")
+CheckboxBox.Name = "CheckboxBox"
+CheckboxBox.Parent = ToggleRow
+CheckboxBox.BackgroundColor3 = Color3.fromRGB(22, 22, 22)
+CheckboxBox.BorderSizePixel = 0
+CheckboxBox.Position = UDim2.new(0, 0, 0.5, -5)
+CheckboxBox.Size = UDim2.new(0, 10, 0, 10)
+CheckboxBox.Text = ""
+
+local CheckboxStroke = Instance.new("UIStroke")
+CheckboxStroke.Color = Color3.fromRGB(55, 55, 55)
+CheckboxStroke.Thickness = 1
+CheckboxStroke.Parent = CheckboxBox
+
+local CheckboxLabel = Instance.new("TextButton")
+CheckboxLabel.Name = "CheckboxLabel"
+CheckboxLabel.Parent = ToggleRow
+CheckboxLabel.BackgroundTransparency = 1
+CheckboxLabel.Position = UDim2.new(0, 16, 0, 0)
+CheckboxLabel.Size = UDim2.new(1, -16, 1, 0)
+CheckboxLabel.Font = Enum.Font.SourceSans
+CheckboxLabel.Text = "force hit"
+CheckboxLabel.TextColor3 = Color3.fromRGB(145, 145, 145)
+CheckboxLabel.TextSize = 13
+CheckboxLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+-- Target Keybind
+local BindRow = Instance.new("Frame")
+BindRow.Name = "BindRow"
+BindRow.Parent = RageGroupbox
+BindRow.BackgroundTransparency = 1
+BindRow.Position = UDim2.new(0, 12, 0, 56)
+BindRow.Size = UDim2.new(1, -24, 0, 20)
+
+local BindLabel = Instance.new("TextLabel")
+BindLabel.Name = "BindLabel"
+BindLabel.Parent = BindRow
+BindLabel.BackgroundTransparency = 1
+BindLabel.Size = UDim2.new(0.5, 0, 1, 0)
+BindLabel.Font = Enum.Font.SourceSans
+BindLabel.Text = "target bind"
+BindLabel.TextColor3 = Color3.fromRGB(145, 145, 145)
+BindLabel.TextSize = 13
+BindLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+local KeybindBtn = Instance.new("TextButton")
+KeybindBtn.Name = "KeybindBtn"
+KeybindBtn.Parent = BindRow
+KeybindBtn.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+KeybindBtn.Position = UDim2.new(1, -45, 0.5, -7)
+KeybindBtn.Size = UDim2.new(0, 45, 0, 14)
+KeybindBtn.Font = Enum.Font.SourceSans
+KeybindBtn.Text = "c"
+KeybindBtn.TextColor3 = Color3.fromRGB(130, 130, 130)
+KeybindBtn.TextSize = 11
+
+local KeybindCorner = Instance.new("UICorner")
+KeybindCorner.CornerRadius = UDim.new(0, 3)
+KeybindCorner.Parent = KeybindBtn
+
+local KeybindStroke = Instance.new("UIStroke")
+KeybindStroke.Color = Color3.fromRGB(42, 42, 42)
+KeybindStroke.Thickness = 1
+KeybindStroke.Parent = KeybindBtn
+
+-- Auto Reload Checkbox
+local AutoReloadRow = Instance.new("Frame")
+AutoReloadRow.Name = "AutoReloadRow"
+AutoReloadRow.Parent = RageGroupbox
+AutoReloadRow.BackgroundTransparency = 1
+AutoReloadRow.Position = UDim2.new(0, 12, 0, 84)
+AutoReloadRow.Size = UDim2.new(1, -24, 0, 20)
+
+local AutoReloadBox = Instance.new("TextButton")
+AutoReloadBox.Name = "AutoReloadBox"
+AutoReloadBox.Parent = AutoReloadRow
+AutoReloadBox.BackgroundColor3 = Color3.fromRGB(22, 22, 22)
+AutoReloadBox.BorderSizePixel = 0
+AutoReloadBox.Position = UDim2.new(0, 0, 0.5, -5)
+AutoReloadBox.Size = UDim2.new(0, 10, 0, 10)
+AutoReloadBox.Text = ""
+
+local AutoReloadBoxStroke = Instance.new("UIStroke")
+AutoReloadBoxStroke.Color = Color3.fromRGB(55, 55, 55)
+AutoReloadBoxStroke.Thickness = 1
+AutoReloadBoxStroke.Parent = AutoReloadBox
+
+local AutoReloadLabel = Instance.new("TextButton")
+AutoReloadLabel.Name = "AutoReloadLabel"
+AutoReloadLabel.Parent = AutoReloadRow
+AutoReloadLabel.BackgroundTransparency = 1
+AutoReloadLabel.Position = UDim2.new(0, 16, 0, 0)
+AutoReloadLabel.Size = UDim2.new(1, -16, 1, 0)
+AutoReloadLabel.Font = Enum.Font.SourceSans
+AutoReloadLabel.Text = "auto reload"
+AutoReloadLabel.TextColor3 = Color3.fromRGB(145, 145, 145)
+AutoReloadLabel.TextSize = 13
+AutoReloadLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+-- Fly Speed Slider
+local FlySpeedRow = Instance.new("Frame")
+FlySpeedRow.Name = "FlySpeedRow"
+FlySpeedRow.Parent = RageGroupbox
+FlySpeedRow.BackgroundTransparency = 1
+FlySpeedRow.Position = UDim2.new(0, 12, 0, 112)
+FlySpeedRow.Size = UDim2.new(1, -24, 0, 25)
+
+local FlySpeedLabel = Instance.new("TextLabel")
+FlySpeedLabel.Name = "FlySpeedLabel"
+FlySpeedLabel.Parent = FlySpeedRow
+FlySpeedLabel.BackgroundTransparency = 1
+FlySpeedLabel.Size = UDim2.new(0.4, 0, 1, 0)
+FlySpeedLabel.Font = Enum.Font.SourceSans
+FlySpeedLabel.Text = "fly speed (studs/s)"
+FlySpeedLabel.TextColor3 = Color3.fromRGB(145, 145, 145)
+FlySpeedLabel.TextSize = 13
+FlySpeedLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+local FlySpeedSliderBtn = Instance.new("TextButton")
+FlySpeedSliderBtn.Name = "FlySpeedSliderBtn"
+FlySpeedSliderBtn.Parent = FlySpeedRow
+FlySpeedSliderBtn.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+FlySpeedSliderBtn.Position = UDim2.new(0.4, 5, 0.5, -7)
+FlySpeedSliderBtn.Size = UDim2.new(0.35, -10, 0, 14)
+FlySpeedSliderBtn.Font = Enum.Font.SourceSans
+FlySpeedSliderBtn.Text = "50"
+FlySpeedSliderBtn.TextColor3 = Color3.fromRGB(130, 130, 130)
+FlySpeedSliderBtn.TextSize = 11
+
+local FlySpeedTextBox = Instance.new("TextBox")
+FlySpeedTextBox.Name = "FlySpeedTextBox"
+FlySpeedTextBox.Parent = FlySpeedRow
+FlySpeedTextBox.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+FlySpeedTextBox.Position = UDim2.new(0.75, 5, 0.5, -7)
+FlySpeedTextBox.Size = UDim2.new(0.25, -15, 0, 14)
+FlySpeedTextBox.Font = Enum.Font.SourceSans
+FlySpeedTextBox.PlaceholderText = "custom"
+FlySpeedTextBox.Text = ""
+FlySpeedTextBox.TextColor3 = Color3.fromRGB(130, 130, 130)
+FlySpeedTextBox.TextSize = 11
+
+-- Speed Multiplier Slider
+local SpeedMultRow = Instance.new("Frame")
+SpeedMultRow.Name = "SpeedMultRow"
+SpeedMultRow.Parent = RageGroupbox
+SpeedMultRow.BackgroundTransparency = 1
+SpeedMultRow.Position = UDim2.new(0, 12, 0, 145)
+SpeedMultRow.Size = UDim2.new(1, -24, 0, 25)
+
+local SpeedMultLabel = Instance.new("TextLabel")
+SpeedMultLabel.Name = "SpeedMultLabel"
+SpeedMultLabel.Parent = SpeedMultRow
+SpeedMultLabel.BackgroundTransparency = 1
+SpeedMultLabel.Size = UDim2.new(0.4, 0, 1, 0)
+SpeedMultLabel.Font = Enum.Font.SourceSans
+SpeedMultLabel.Text = "speed multiplier (x)"
+SpeedMultLabel.TextColor3 = Color3.fromRGB(145, 145, 145)
+SpeedMultLabel.TextSize = 13
+SpeedMultLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+local SpeedMultSliderBtn = Instance.new("TextButton")
+SpeedMultSliderBtn.Name = "SpeedMultSliderBtn"
+SpeedMultSliderBtn.Parent = SpeedMultRow
+SpeedMultSliderBtn.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+SpeedMultSliderBtn.Position = UDim2.new(0.4, 5, 0.5, -7)
+SpeedMultSliderBtn.Size = UDim2.new(0.35, -10, 0, 14)
+SpeedMultSliderBtn.Font = Enum.Font.SourceSans
+SpeedMultSliderBtn.Text = "2"
+SpeedMultSliderBtn.TextColor3 = Color3.fromRGB(130, 130, 130)
+SpeedMultSliderBtn.TextSize = 11
+
+local SpeedMultTextBox = Instance.new("TextBox")
+SpeedMultTextBox.Name = "SpeedMultTextBox"
+SpeedMultTextBox.Parent = SpeedMultRow
+SpeedMultTextBox.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+SpeedMultTextBox.Position = UDim2.new(0.75, 5, 0.5, -7)
+SpeedMultTextBox.Size = UDim2.new(0.25, -15, 0, 14)
+SpeedMultTextBox.Font = Enum.Font.SourceSans
+SpeedMultTextBox.PlaceholderText = "custom"
+SpeedMultTextBox.Text = ""
+SpeedMultTextBox.TextColor3 = Color3.fromRGB(130, 130, 130)
+SpeedMultTextBox.TextSize = 11
+
+-- CFrame Fly Toggle
+local FlyToggleRow = Instance.new("Frame")
+FlyToggleRow.Name = "FlyToggleRow"
+FlyToggleRow.Parent = RageGroupbox
+FlyToggleRow.BackgroundTransparency = 1
+FlyToggleRow.Position = UDim2.new(0, 12, 0, 178)
+FlyToggleRow.Size = UDim2.new(1, -24, 0, 20)
+
+local FlyToggleBox = Instance.new("TextButton")
+FlyToggleBox.Name = "FlyToggleBox"
+FlyToggleBox.Parent = FlyToggleRow
+FlyToggleBox.BackgroundColor3 = Color3.fromRGB(22, 22, 22)
+FlyToggleBox.BorderSizePixel = 0
+FlyToggleBox.Position = UDim2.new(0, 0, 0.5, -5)
+FlyToggleBox.Size = UDim2.new(0, 10, 0, 10)
+FlyToggleBox.Text = ""
+
+local FlyToggleLabel = Instance.new("TextButton")
+FlyToggleLabel.Name = "FlyToggleLabel"
+FlyToggleLabel.Parent = FlyToggleRow
+FlyToggleLabel.BackgroundTransparency = 1
+FlyToggleLabel.Position = UDim2.new(0, 16, 0, 0)
+FlyToggleLabel.Size = UDim2.new(0.5, 0, 1, 0)
+FlyToggleLabel.Font = Enum.Font.SourceSans
+FlyToggleLabel.Text = "cframe fly"
+FlyToggleLabel.TextColor3 = Color3.fromRGB(145, 145, 145)
+FlyToggleLabel.TextSize = 13
+FlyToggleLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+local FlyKeybindBtn = Instance.new("TextButton")
+FlyKeybindBtn.Name = "FlyKeybindBtn"
+FlyKeybindBtn.Parent = FlyToggleRow
+FlyKeybindBtn.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+FlyKeybindBtn.Position = UDim2.new(0.7, 5, 0.5, -7)
+FlyKeybindBtn.Size = UDim2.new(0.3, -20, 0, 14)
+FlyKeybindBtn.Font = Enum.Font.SourceSans
+FlyKeybindBtn.Text = "LSHIFT"
+FlyKeybindBtn.TextColor3 = Color3.fromRGB(130, 130, 130)
+FlyKeybindBtn.TextSize = 11
+
+-- CFrame Speed Toggle
+local SpeedToggleRow = Instance.new("Frame")
+SpeedToggleRow.Name = "SpeedToggleRow"
+SpeedToggleRow.Parent = RageGroupbox
+SpeedToggleRow.BackgroundTransparency = 1
+SpeedToggleRow.Position = UDim2.new(0, 12, 0, 206)
+SpeedToggleRow.Size = UDim2.new(1, -24, 0, 20)
+
+local SpeedToggleBox = Instance.new("TextButton")
+SpeedToggleBox.Name = "SpeedToggleBox"
+SpeedToggleBox.Parent = SpeedToggleRow
+SpeedToggleBox.BackgroundColor3 = Color3.fromRGB(22, 22, 22)
+SpeedToggleBox.BorderSizePixel = 0
+SpeedToggleBox.Position = UDim2.new(0, 0, 0.5, -5)
+SpeedToggleBox.Size = UDim2.new(0, 10, 0, 10)
+SpeedToggleBox.Text = ""
+
+local SpeedToggleLabel = Instance.new("TextButton")
+SpeedToggleLabel.Name = "SpeedToggleLabel"
+SpeedToggleLabel.Parent = SpeedToggleRow
+SpeedToggleLabel.BackgroundTransparency = 1
+SpeedToggleLabel.Position = UDim2.new(0, 16, 0, 0)
+SpeedToggleLabel.Size = UDim2.new(0.5, 0, 1, 0)
+SpeedToggleLabel.Font = Enum.Font.SourceSans
+SpeedToggleLabel.Text = "cframe speed"
+SpeedToggleLabel.TextColor3 = Color3.fromRGB(145, 145, 145)
+SpeedToggleLabel.TextSize = 13
+SpeedToggleLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+local SpeedKeybindBtn = Instance.new("TextButton")
+SpeedKeybindBtn.Name = "SpeedKeybindBtn"
+SpeedKeybindBtn.Parent = SpeedToggleRow
+SpeedKeybindBtn.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+SpeedKeybindBtn.Position = UDim2.new(0.7, 5, 0.5, -7)
+SpeedKeybindBtn.Size = UDim2.new(0.3, -20, 0, 14)
+SpeedKeybindBtn.Font = Enum.Font.SourceSans
+SpeedKeybindBtn.Text = "LCTRL"
+SpeedKeybindBtn.TextColor3 = Color3.fromRGB(130, 130, 130)
+SpeedKeybindBtn.TextSize = 11
+
+-- Slider update functions
+local function UpdateFlySpeed(value)
+	value = math.clamp(value, 1, 500)
+	FlySpeedValue = value
+	FlySpeedSliderBtn.Text = tostring(value)
+	CustomFlySpeed = nil
+	FlySpeedTextBox.Text = ""
+end
+
+local function UpdateSpeedMultiplier(value)
+	value = math.clamp(value, 1, 50)
+	SpeedMultiplierValue = value
+	SpeedMultSliderBtn.Text = tostring(value)
+	CustomSpeedMultiplier = nil
+	SpeedMultTextBox.Text = ""
+end
+
+-- Slider click handlers
+FlySpeedSliderBtn.MouseButton1Click:Connect(function()
+	IsBinding = true
+	BindingTarget = "FlySpeed"
+	FlySpeedSliderBtn.Text = "..."
+	FlySpeedSliderBtn.TextColor3 = Color3.fromRGB(215, 60, 60)
+end)
+
+SpeedMultSliderBtn.MouseButton1Click:Connect(function()
+	IsBinding = true
+	BindingTarget = "SpeedMult"
+	SpeedMultSliderBtn.Text = "..."
+	SpeedMultSliderBtn.TextColor3 = Color3.fromRGB(215, 60, 60)
+end)
+
+-- Text box handlers
+FlySpeedTextBox.FocusLost:Connect(function()
+	local num = tonumber(FlySpeedTextBox.Text)
+	if num then
+		CustomFlySpeed = math.clamp(num, 1, 999)
+		FlySpeedValue = math.clamp(CustomFlySpeed, 1, 500)
+		FlySpeedSliderBtn.Text = tostring(FlySpeedValue)
+	else
+		CustomFlySpeed = nil
+	end
+end)
+
+SpeedMultTextBox.FocusLost:Connect(function()
+	local num = tonumber(SpeedMultTextBox.Text)
+	if num then
+		CustomSpeedMultiplier = math.clamp(num, 1, 999)
+		SpeedMultiplierValue = math.clamp(CustomSpeedMultiplier, 1, 50)
+		SpeedMultSliderBtn.Text = tostring(SpeedMultiplierValue)
+	else
+		CustomSpeedMultiplier = nil
+	end
+end)
+
+-- Fly Toggle (UI button)
+FlyToggleBox.MouseButton1Click:Connect(toggleFly)
+FlyToggleLabel.MouseButton1Click:Connect(toggleFly)
+
+-- Fly Keybind (Toggle)
+FlyKeybindBtn.MouseButton1Click:Connect(function()
+	IsBinding = true
+	BindingTarget = "FlyKeybind"
+	FlyKeybindBtn.Text = "..."
+	FlyKeybindBtn.TextColor3 = Color3.fromRGB(215, 60, 60)
+end)
+
+-- Speed Toggle (UI button)
+SpeedToggleBox.MouseButton1Click:Connect(toggleSpeed)
+SpeedToggleLabel.MouseButton1Click:Connect(toggleSpeed)
+
+-- Speed Keybind (Toggle)
+SpeedKeybindBtn.MouseButton1Click:Connect(function()
+	IsBinding = true
+	BindingTarget = "SpeedKeybind"
+	SpeedKeybindBtn.Text = "..."
+	SpeedKeybindBtn.TextColor3 = Color3.fromRGB(215, 60, 60)
+end)
+
+----------------------------------------------------------------------
+-- Flight RenderStepped Connection (Camera-relative movement)
+----------------------------------------------------------------------
+
+flyConnection = RunService.RenderStepped:Connect(function(deltaTime)
+	if CFrameFlyActive then
+		local character = LocalPlayer.Character
+		local hrp = character and character:FindFirstChild("HumanoidRootPart")
+		
+		if not hrp then return end
+		
+		local moveDirection = Vector3.new(0, 0, 0)
+		local camCF = Camera.CFrame
+		
+		-- Update input flags from keyboard (always reading for movement)
+		inputFlags.forward = UserInputService:IsKeyDown(Enum.KeyCode.W)
+		inputFlags.back = UserInputService:IsKeyDown(Enum.KeyCode.S)
+		inputFlags.left = UserInputService:IsKeyDown(Enum.KeyCode.A)
+		inputFlags.right = UserInputService:IsKeyDown(Enum.KeyCode.D)
+		inputFlags.up = UserInputService:IsKeyDown(Enum.KeyCode.Space)
+		inputFlags.down = UserInputService:IsKeyDown(Enum.KeyCode.LeftControl)
+		
+		if inputFlags.forward then moveDirection = moveDirection + camCF.LookVector end
+		if inputFlags.back then moveDirection = moveDirection - camCF.LookVector end
+		if inputFlags.left then moveDirection = moveDirection - camCF.RightVector end
+		if inputFlags.right then moveDirection = moveDirection + camCF.RightVector end
+		if inputFlags.up then moveDirection = moveDirection + Vector3.new(0, 1, 0) end
+		if inputFlags.down then moveDirection = moveDirection - Vector3.new(0, 1, 0) end
+		
+		if moveDirection.Magnitude > 0 then
+			moveDirection = moveDirection.Unit
+		end
+		
+		if bodyVelocity then
+			bodyVelocity.Velocity = moveDirection * GetFlySpeed()
+		end
+		if bodyGyro then
+			bodyGyro.CFrame = camCF
+		end
+	end
+end)
+
+----------------------------------------------------------------------
+-- Section 2: "hvh"
+----------------------------------------------------------------------
+
+local HvHGroupbox = Instance.new("Frame")
+HvHGroupbox.Name = "HvHGroupbox"
+HvHGroupbox.Parent = Frame_12
+HvHGroupbox.BackgroundColor3 = Color3.fromRGB(13, 13, 13)
+HvHGroupbox.BorderSizePixel = 0
+HvHGroupbox.Position = UDim2.new(0, 264, 0, 35)
+HvHGroupbox.Size = UDim2.new(0, 240, 0, 220)
+
+local HvHGroupboxCorner = Instance.new("UICorner")
+HvHGroupboxCorner.CornerRadius = UDim.new(0, 8)
+HvHGroupboxCorner.Parent = HvHGroupbox
+
+local HvHTopLine = Instance.new("Frame")
+HvHTopLine.Name = "HvHTopLine"
+HvHTopLine.Parent = HvHGroupbox
+HvHTopLine.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+HvHTopLine.BorderSizePixel = 0
+HvHTopLine.Position = UDim2.new(0, 10, 0, 0)
+HvHTopLine.Size = UDim2.new(1, -20, 0, 1)
+
+local HvHGroupboxTitle = Instance.new("TextLabel")
+HvHGroupboxTitle.Name = "HvHGroupboxTitle"
+HvHGroupboxTitle.Parent = HvHGroupbox
+HvHGroupboxTitle.BackgroundTransparency = 1
+HvHGroupboxTitle.Position = UDim2.new(0, 12, 0, 6)
+HvHGroupboxTitle.Size = UDim2.new(0, 100, 0, 14)
+HvHGroupboxTitle.Font = Enum.Font.SourceSans
+HvHGroupboxTitle.Text = "hvh"
+HvHGroupboxTitle.TextColor3 = Color3.fromRGB(200, 200, 200)
+HvHGroupboxTitle.TextSize = 12
+HvHGroupboxTitle.TextXAlignment = Enum.TextXAlignment.Left
+
+local function CreateConfigRow(parent, labelText, yPos, defaultKeyText)
+	local Row = Instance.new("Frame")
+	Row.Name = labelText .. "Row"
+	Row.Parent = parent
+	Row.BackgroundTransparency = 1
+	Row.Position = UDim2.new(0, 12, 0, yPos)
+	Row.Size = UDim2.new(1, -24, 0, 22)
+
+	local Box = Instance.new("TextButton")
+	Box.Name = "CheckboxBox"
+	Box.Parent = Row
+	Box.BackgroundColor3 = Color3.fromRGB(22, 22, 22)
+	Box.BorderSizePixel = 0
+	Box.Position = UDim2.new(0, 0, 0.5, -5)
+	Box.Size = UDim2.new(0, 10, 0, 10)
+	Box.Text = ""
+
+	local Stroke = Instance.new("UIStroke")
+	Stroke.Color = Color3.fromRGB(55, 55, 55)
+	Stroke.Thickness = 1
+	Stroke.Parent = Box
+
+	local Label = Instance.new("TextButton")
+	Label.Name = "CheckboxLabel"
+	Label.Parent = Row
+	Label.BackgroundTransparency = 1
+	Label.Position = UDim2.new(0, 16, 0, 0)
+	Label.Size = UDim2.new(1, -70, 1, 0)
+	Label.Font = Enum.Font.SourceSans
+	Label.Text = labelText
+	Label.TextColor3 = Color3.fromRGB(145, 145, 145)
+	Label.TextSize = 13
+	Label.TextXAlignment = Enum.TextXAlignment.Left
+
+	local KeyBtn = Instance.new("TextButton")
+	KeyBtn.Name = "KeybindBtn"
+	KeyBtn.Parent = Row
+	KeyBtn.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+	KeyBtn.Position = UDim2.new(1, -45, 0.5, -7)
+	KeyBtn.Size = UDim2.new(0, 45, 0, 14)
+	KeyBtn.Font = Enum.Font.SourceSans
+	KeyBtn.Text = string.lower(defaultKeyText)
+	KeyBtn.TextColor3 = Color3.fromRGB(130, 130, 130)
+	KeyBtn.TextSize = 11
+
+	local KeyCorner = Instance.new("UICorner")
+	KeyCorner.CornerRadius = UDim.new(0, 3)
+	KeyCorner.Parent = KeyBtn
+
+	local KeyStroke = Instance.new("UIStroke")
+	KeyStroke.Color = Color3.fromRGB(42, 42, 42)
+	KeyStroke.Thickness = 1
+	KeyStroke.Parent = KeyBtn
+
+	return Box, Label, KeyBtn
+end
+
+local SpoofBox, SpoofLabelBtn, SpoofBindBtn = CreateConfigRow(HvHGroupbox, "spoof", 28, Config.SpoofKey.Name)
+local RakBox, RakLabelBtn, RakBindBtn = CreateConfigRow(HvHGroupbox, "raknet", 56, Config.RakKey.Name)
+local DesyncBox, DesyncLabelBtn, DesyncBindBtn = CreateConfigRow(HvHGroupbox, "desync", 84, Config.DesyncKey.Name)
+
+----------------------------------------------------------------------
+-- Config System
+----------------------------------------------------------------------
+
+local function SaveConfig()
+	if not writefile then return end
+
+	local configData = {
+		ActivationKey = ActivationKey.Name,
+		SpoofKey = Config.SpoofKey.Name,
+		RakKey = Config.RakKey.Name,
+		DesyncKey = Config.DesyncKey.Name,
+		ForceHitTextEnabled = ForceHitTextEnabled,
+		SpoofTextEnabled = SpoofTextEnabled,
+		RakTextEnabled = RakTextEnabled,
+		DesyncTextEnabled = DesyncTextEnabled,
+		AutoReloadActive = AutoReloadActive,
+		FlySpeed = FlySpeedValue,
+		SpeedMultiplier = SpeedMultiplierValue,
+		FlyToggleKey = FlyToggleKey.Name,
+		SpeedToggleKey = SpeedToggleKey.Name
+	}
+
+	local success, encoded = pcall(function()
+		return HttpService:JSONEncode(configData)
+	end)
+
+	if success then
+		if makefolder then pcall(function() makefolder(FolderName) end) end
+		writefile(FileName, encoded)
+	end
+end
+
+local function LoadConfig()
+	if not isfile or not readfile then return end
+	if not isfile(FileName) then return end
+
+	local success, content = pcall(function()
+		return readfile(FileName)
+	end)
+
+	if success then
+		local decodeSuccess, decoded = pcall(function()
+			return HttpService:JSONDecode(content)
+		end)
+
+		if decodeSuccess and decoded then
+			if decoded.ActivationKey then ActivationKey = Enum.KeyCode[decoded.ActivationKey] end
+			if decoded.SpoofKey then Config.SpoofKey = Enum.KeyCode[decoded.SpoofKey] end
+			if decoded.RakKey then Config.RakKey = Enum.KeyCode[decoded.RakKey] end
+			if decoded.DesyncKey then Config.DesyncKey = Enum.KeyCode[decoded.DesyncKey] end
+			if decoded.FlyToggleKey then FlyToggleKey = Enum.KeyCode[decoded.FlyToggleKey] 
+				FlyKeybindBtn.Text = FlyToggleKey.Name end
+			if decoded.SpeedToggleKey then SpeedToggleKey = Enum.KeyCode[decoded.SpeedToggleKey]
+				SpeedKeybindBtn.Text = SpeedToggleKey.Name end
+
+			ForceHitTextEnabled = decoded.ForceHitTextEnabled or false
+			SpoofTextEnabled = decoded.SpoofTextEnabled or false
+			RakTextEnabled = decoded.RakTextEnabled or false
+			DesyncTextEnabled = decoded.DesyncTextEnabled or false
+			AutoReloadActive = decoded.AutoReloadActive or false
+			
+			if decoded.FlySpeed then UpdateFlySpeed(decoded.FlySpeed) end
+			if decoded.SpeedMultiplier then UpdateSpeedMultiplier(decoded.SpeedMultiplier) end
+
+			KeybindBtn.Text = string.lower(ActivationKey.Name)
+			SpoofBindBtn.Text = string.lower(Config.SpoofKey.Name)
+			RakBindBtn.Text = string.lower(Config.RakKey.Name)
+			DesyncBindBtn.Text = string.lower(Config.DesyncKey.Name)
+		end
+	end
+end
+
+----------------------------------------------------------------------
+-- Target Mechanism & Backend Loops
+----------------------------------------------------------------------
+
+local function SetNoTarget()
+	NameLabel.Text = "No Target"
+	NameLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
+	DistanceLabel.Text = ""
+	AvatarImage.Image = ""
+	TweenService:Create(HealthBar, TweenInfo.new(0.1), { Size = UDim2.new(0, 0, 1, 0) }):Play()
+	LastTrackedUserId = nil
+	Beam.Enabled = false
+end
+
+local function HasForceField(character)
+	return character:FindFirstChildOfClass("ForceField") ~= nil
+end
+
+local function GetPlayerClosestToMouse()
+	local MousePos = Vector2.new(Mouse.X, Mouse.Y)
+	local Character = LocalPlayer.Character
+	local MyTorso = Character and Character:FindFirstChild("UpperTorso")
+	if not MyTorso then return nil, 0 end
+
+	local ClosestPlayer = nil
+	local ClosestScreenDist = math.huge
+	local ClosestWorldDist = 0
+
+	for _, Player in ipairs(Players:GetPlayers()) do
+		if Player ~= LocalPlayer and Player.Character then
+			local TargetHead = Player.Character:FindFirstChild("Head")
+			local TargetHum = Player.Character:FindFirstChildOfClass("Humanoid")
+			local TgtBodyEffects = Player.Character:FindFirstChild("BodyEffects")
+			local IsKO = TgtBodyEffects and TgtBodyEffects:FindFirstChild("K.O") and TgtBodyEffects["K.O"].Value
+
+			if TargetHead and TargetHum and TargetHum.Health > 0 and not IsKO then
+				local ScreenPos, OnScreen = Camera:WorldToScreenPoint(TargetHead.Position)
+				if OnScreen then
+					local ScreenDist = (Vector2.new(ScreenPos.X, ScreenPos.Y) - MousePos).Magnitude
+					if ScreenDist < ClosestScreenDist then
+						local WorldDist = (TargetHead.Position - MyTorso.Position).Magnitude
+						local RayDirection = (TargetHead.Position - MyTorso.Position).Unit * WorldDist
+						local RayParams = RaycastParams.new()
+						RayParams.FilterType = Enum.RaycastFilterType.Exclude
+						RayParams.FilterDescendantsInstances = { workspace.Ignored, workspace.Players, Character }
+
+						local WallCheck = workspace:Raycast(MyTorso.Position, RayDirection, RayParams)
+
+						if not WallCheck then
+							ClosestScreenDist = ScreenDist
+							ClosestWorldDist = WorldDist
+							ClosestPlayer = Player.Character
+						end
+					end
+				end
+			end
+		end
+	end
+
+	return ClosestPlayer, ClosestWorldDist
+end
+
+local function FireWeaponAtTarget()
+	if not ForceHitActive or not LockedTarget then return end
+
+	local Character = LocalPlayer.Character
+	local Tool = Character and Character:FindFirstChildOfClass("Tool")
+	if not Tool then return end
+	
+	if HasForceField(LockedTarget) then return end
+
+	local Handle = Tool:FindFirstChild("Handle")
+	local GunScript = Tool:FindFirstChild("Script")
+	local Ammo = GunScript and GunScript:FindFirstChild("Ammo") and GunScript.Ammo:FindFirstChild("CLIENT")
+
+	if Ammo and Ammo.Value <= 0 then
+		if Handle and Handle:FindFirstChild("NoAmmo") then Handle.NoAmmo:Play() end
+		return
+	end
+
+	local BodyEffects = Character:FindFirstChild("BodyEffects")
+	if BodyEffects and BodyEffects:FindFirstChild("Reloading_CLIENT") and BodyEffects.Reloading_CLIENT.Value == true then
+		return
+	end
+
+	local IsShotgun = Tool.Name == "[DoubleBarrel]" or Tool.Name == "[Shotgun]" or Tool.Name == "[TacticalShotgun]"
+
+	local MyRoot = Character:FindFirstChild("HumanoidRootPart")
+	local MyTorso = Character:FindFirstChild("UpperTorso")
+	if not MyTorso or not MyRoot then return end
+
+	local TargetRoot = LockedTarget:FindFirstChild("HumanoidRootPart")
+	local TargetHum = LockedTarget:FindFirstChildOfClass("Humanoid")
+	if not TargetRoot or not TargetHum or TargetHum.Health <= 0 then return end
+
+	local BasePosition = TargetRoot.Position
+	local OriginPosition = Handle and Handle.Position or MyRoot.Position
+	local ServerTime = workspace:GetServerTimeNow()
+
+	if Ammo then Ammo.Value = math.max(0, Ammo.Value - 1) end
+
+	if Handle and Handle:FindFirstChild("Shoot") then
+		local AudioClone = Handle.Shoot:Clone()
+		game:GetService("Debris"):AddItem(AudioClone, 2)
+		AudioClone.Parent = Handle
+		AudioClone:Play()
+	end
+
+	local RayHitTable = {}
+	local OffsetTable = {}
+
+	local ShotgunPelletSpreadFactors = { -1.35, -0.9, 0.25, 0.55, 1 }
+	local RayCount = IsShotgun and 5 or 1
+
+	local LocalRandomGenerator = Random.new(ServerTime)
+	local AngleRotation = CFrame.Angles(0, 0, math.rad(LocalRandomGenerator:NextNumber(-90, 90)))
+	local Multiplier = LocalRandomGenerator:NextNumber(0, 5.75)
+	local DirectSign = (LocalRandomGenerator:NextInteger(0, 1) == 1) and 1 or -1
+	local CalculatedSpread = Multiplier * DirectSign
+
+	if CalculatedSpread > -0.35 and CalculatedSpread < 0.35 then
+		CalculatedSpread = 0.35
+	end
+
+	for i = 1, RayCount do
+		local FinalSimulatedHitPos = BasePosition
+
+		if IsShotgun then
+			local SpreadAngle = ShotgunPelletSpreadFactors[i] * CalculatedSpread
+			local SpreadCFrame = CFrame.new(OriginPosition, BasePosition) * AngleRotation * CFrame.Angles(math.rad(SpreadAngle), 0, 0)
+			FinalSimulatedHitPos = OriginPosition + (SpreadCFrame.LookVector * (BasePosition - OriginPosition).Magnitude)
+		end
+
+		local CalculatedNormal = (OriginPosition - FinalSimulatedHitPos).Unit
+
+		table.insert(RayHitTable, {
+			Instance = TargetRoot,
+			Position = FinalSimulatedHitPos,
+			Normal = CalculatedNormal
+		})
+
+		table.insert(OffsetTable, {
+			thePart = TargetRoot,
+			theOffset = TargetRoot.CFrame:PointToObjectSpace(FinalSimulatedHitPos)
+		})
+	end
+
+	if TargetHum then
+		local BaseDamage = (Tool.Name == "[DoubleBarrel]") and 14 or 20
+		local TotalDamage = IsShotgun and (BaseDamage * 5) or BaseDamage
+
+		if TargetHum.Health - TotalDamage < 0.5 then
+			TargetHum.Health = 0.5
+		else
+			TargetHum:TakeDamage(TotalDamage)
+		end
+		ReplicatedStorage.MainBindedEvent:Fire("DamageIndicatorText", TotalDamage, BasePosition, true, false)
+	end
+
+	ReplicatedStorage.MainEvent:FireServer("Shoot", {
+		RayHitTable,
+		OffsetTable,
+		OriginPosition,
+		BasePosition,
+		ServerTime
+	})
+end
+
+local function StartFiringLoop()
+	IsFiring = true
+	while IsFiring and ForceHitActive do
+		FireWeaponAtTarget()
+		task.wait(0.30)
+	end
+end
+
+-- RakNet Packets
+local function RakHook(packet)
+	if packet.PacketId == 0x1B then
+		local data = packet.AsBuffer
+
+		if SpoofActive then
+			local maxOffset = math.max(Config.X, Config.Y, Config.Z)
+
+			if buffer.len(data) > maxOffset + 4 then
+				buffer.writeu8(data, 25, 1)
+				buffer.writef32(data, Config.X, 0.0)
+				buffer.writef32(data, Config.Y, 65.0)
+				buffer.writef32(data, Config.Z, 0.0)
+			end
+		end
+
+		if RakActive then
+			buffer.writeu32(data, 1, 0xFFFFFFFF)
+		end
+
+		packet:SetData(data)
+	end
+end
+
+if raknet and raknet.add_send_hook then
+	raknet.add_send_hook(RakHook)
+end
+
+-- Desync POST-SIMULATION Loop
+RunService.PostSimulation:Connect(function()
+	if DesyncActive and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+		Sleeping = not Sleeping
+
+		if sethiddenproperty then
+			sethiddenproperty(
+				LocalPlayer.Character.HumanoidRootPart,
+				"NetworkIsSleeping",
+				Sleeping
+			)
+		end
+	end
+end)
+
+-- Auto Reload monitoring loop
+RunService.Heartbeat:Connect(function()
+	if AutoReloadActive then
+		AutoReload()
+	end
+end)
+
+----------------------------------------------------------------------
+-- UI Menu Synchronizers
+----------------------------------------------------------------------
+
+local function updateToggleVisuals()
+	if ForceHitTextEnabled then
+		CheckboxBox.BackgroundColor3 = Color3.fromRGB(215, 60, 60)
+		CheckboxLabel.TextColor3 = Color3.fromRGB(230, 230, 230)
+		if ForceHitActive and LockedTarget then HUDFrame.Visible = true end
+	else
+		CheckboxBox.BackgroundColor3 = Color3.fromRGB(22, 22, 22)
+		CheckboxLabel.TextColor3 = Color3.fromRGB(145, 145, 145)
+		HUDFrame.Visible = false
+	end
+	
+	if AutoReloadActive then
+		AutoReloadBox.BackgroundColor3 = Color3.fromRGB(215, 60, 60)
+		AutoReloadLabel.TextColor3 = Color3.fromRGB(230, 230, 230)
+	else
+		AutoReloadBox.BackgroundColor3 = Color3.fromRGB(22, 22, 22)
+		AutoReloadLabel.TextColor3 = Color3.fromRGB(145, 145, 145)
+	end
+end
+
+local function UpdateHvHVisuals()
+	if SpoofTextEnabled then
+		SpoofBox.BackgroundColor3 = Color3.fromRGB(215, 60, 60)
+		SpoofLabelBtn.TextColor3 = Color3.fromRGB(230, 230, 230)
+	else
+		SpoofBox.BackgroundColor3 = Color3.fromRGB(22, 22, 22)
+		SpoofLabelBtn.TextColor3 = Color3.fromRGB(145, 145, 145)
+	end
+
+	if RakTextEnabled then
+		RakBox.BackgroundColor3 = Color3.fromRGB(215, 60, 60)
+		RakLabelBtn.TextColor3 = Color3.fromRGB(230, 230, 230)
+	else
+		RakBox.BackgroundColor3 = Color3.fromRGB(22, 22, 22)
+		RakLabelBtn.TextColor3 = Color3.fromRGB(145, 145, 145)
+	end
+
+	if DesyncTextEnabled then
+		DesyncBox.BackgroundColor3 = Color3.fromRGB(215, 60, 60)
+		DesyncLabelBtn.TextColor3 = Color3.fromRGB(230, 230, 230)
+	else
+		DesyncBox.BackgroundColor3 = Color3.fromRGB(22, 22, 22)
+		DesyncLabelBtn.TextColor3 = Color3.fromRGB(145, 145, 145)
+	end
+end
+
+----------------------------------------------------------------------
+-- Runtime Environment Update Heartbeats
+----------------------------------------------------------------------
+
+RunService.Heartbeat:Connect(function()
+	if not ForceHitActive or not LockedTarget then
+		if ForceHitTextEnabled then
+			SetNoTarget()
+		else
+			Beam.Enabled = false
+			HUDFrame.Visible = false
+		end
+		return
+	end
+	
+	local hum = LockedTarget:FindFirstChildOfClass("Humanoid")
+	local targetRoot = LockedTarget:FindFirstChild("HumanoidRootPart")
+	local Character = LocalPlayer.Character
+	local MyTorso = Character and Character:FindFirstChild("UpperTorso")
+
+	if not hum or not targetRoot then
+		LockedTarget = nil
+		IsFiring = false
+		if ForceHitTextEnabled then
+			SetNoTarget()
+		else
+			Beam.Enabled = false
+			HUDFrame.Visible = false
+		end
+		return
+	end
+
+	local player = Players:GetPlayerFromCharacter(LockedTarget)
+	if not player then
+		LockedTarget = nil
+		IsFiring = false
+		if ForceHitTextEnabled then
+			SetNoTarget()
+		else
+			Beam.Enabled = false
+			HUDFrame.Visible = false
+		end
+		return
+	end
+
+	if ForceHitTextEnabled then
+		HUDFrame.Visible = true
+		if LastTrackedUserId ~= player.UserId then
+			AvatarImage.Image = "rbxthumb://type=AvatarHeadShot&id=" .. player.UserId .. "&w=150&h=150"
+			LastTrackedUserId = player.UserId
+		end
+
+		NameLabel.Text = "  " .. player.DisplayName .. " (@" .. player.Name .. ")"
+		NameLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+
+		if MyTorso then
+			DistanceLabel.Text = "   " .. math.floor((targetRoot.Position - MyTorso.Position).Magnitude) .. " studs"
+		end
+
+		local healthPct = math.clamp(hum.Health / hum.MaxHealth, 0, 1)
+		TweenService:Create(HealthBar, TweenInfo.new(0.1), { Size = UDim2.new(healthPct, 0, 1, 0) }):Play()
+	else
+		HUDFrame.Visible = false
+	end
+
+	local MouseRay = Camera:ScreenPointToRay(Mouse.X, Mouse.Y)
+	local MouseWorldPos = MouseRay.Origin + MouseRay.Direction * 20
+
+	BeamPartA.CFrame = CFrame.new(MouseWorldPos)
+	BeamPartB.CFrame = CFrame.new(targetRoot.Position)
+	Beam.Enabled = true
+end)
+
+----------------------------------------------------------------------
+-- User Input Connection Interceptors (TOGGLE VERSION)
+----------------------------------------------------------------------
+
+UserInputService.InputBegan:Connect(function(Input, GameProcessed)
+	if GameProcessed then return end
+
+	-- Menu toggle
+	if Input.KeyCode == MenuToggleKey then
+		Frame.Visible = not Frame.Visible
+		return
+	end
+	
+	-- Fly Toggle Key (press to toggle on/off)
+	if Input.KeyCode == FlyToggleKey and not IsBinding then
+		toggleFly()
+	end
+	
+	-- Speed Toggle Key (press to toggle on/off)
+	if Input.KeyCode == SpeedToggleKey and not IsBinding then
+		toggleSpeed()
+	end
+
+	-- Key Rebinding Mechanics Matrix
+	if IsBinding and BindingTarget then
+		if Input.UserInputType == Enum.UserInputType.Keyboard then
+			local chosenKey = Input.KeyCode
+			IsBinding = false
+
+			if BindingTarget == "ForceHit" then
+				ActivationKey = chosenKey
+				KeybindBtn.Text = string.lower(chosenKey.Name)
+				KeybindBtn.TextColor3 = Color3.fromRGB(130, 130, 130)
+			elseif BindingTarget == "Spoof" then
+				Config.SpoofKey = chosenKey
+				SpoofBindBtn.Text = string.lower(chosenKey.Name)
+				SpoofBindBtn.TextColor3 = Color3.fromRGB(130, 130, 130)
+			elseif BindingTarget == "RakNet" then
+				Config.RakKey = chosenKey
+				RakBindBtn.Text = string.lower(chosenKey.Name)
+				RakBindBtn.TextColor3 = Color3.fromRGB(130, 130, 130)
+			elseif BindingTarget == "Desync" then
+				Config.DesyncKey = chosenKey
+				DesyncBindBtn.Text = string.lower(chosenKey.Name)
+				DesyncBindBtn.TextColor3 = Color3.fromRGB(130, 130, 130)
+			elseif BindingTarget == "FlySpeed" then
+				local num = tonumber(chosenKey.Name)
+				if num then UpdateFlySpeed(num) end
+			elseif BindingTarget == "SpeedMult" then
+				local num = tonumber(chosenKey.Name)
+				if num then UpdateSpeedMultiplier(num) end
+			elseif BindingTarget == "FlyKeybind" then
+				FlyToggleKey = chosenKey
+				FlyKeybindBtn.Text = string.upper(chosenKey.Name)
+				FlyKeybindBtn.TextColor3 = Color3.fromRGB(130, 130, 130)
+			elseif BindingTarget == "SpeedKeybind" then
+				SpeedToggleKey = chosenKey
+				SpeedKeybindBtn.Text = string.upper(chosenKey.Name)
+				SpeedKeybindBtn.TextColor3 = Color3.fromRGB(130, 130, 130)
+			end
+			BindingTarget = nil
+			SaveConfig()
+		end
+		return
+	end
+
+	-- Force Hit Core Key Trigger
+	if Input.KeyCode == ActivationKey then
+		ForceHitActive = not ForceHitActive
+		if ForceHitActive then
+			local closest, _ = GetPlayerClosestToMouse()
+			if closest then
+				LockedTarget = closest
+				if not IsFiring then
+					task.spawn(StartFiringLoop)
+				end
+			end
+		else
+			LockedTarget = nil
+			IsFiring = false
+			if ForceHitTextEnabled then
+				SetNoTarget()
+			else
+				Beam.Enabled = false
+				HUDFrame.Visible = false
+			end
+		end
+	end
+
+	-- Spoof Core Key Trigger
+	if Input.KeyCode == Config.SpoofKey then
+		SpoofActive = not SpoofActive
+		UpdateLabels()
+	end
+
+	-- RakNet Core Key Trigger
+	if Input.KeyCode == Config.RakKey then
+		RakActive = not RakActive
+		UpdateLabels()
+	end
+
+	-- Desync Core Key Trigger
+	if Input.KeyCode == Config.DesyncKey then
+		DesyncActive = not DesyncActive
+		UpdateLabels()
+	end
+end)
+
+----------------------------------------------------------------------
+-- UI Interactive Connection Interceptors
+----------------------------------------------------------------------
+
+local function toggleForceHitText()
+	ForceHitTextEnabled = not ForceHitTextEnabled
+	updateToggleVisuals()
+	SaveConfig()
+end
+
+local function toggleAutoReload()
+	AutoReloadActive = not AutoReloadActive
+	updateToggleVisuals()
+	SaveConfig()
+end
+
+CheckboxBox.MouseButton1Click:Connect(toggleForceHitText)
+CheckboxLabel.MouseButton1Click:Connect(toggleForceHitText)
+AutoReloadBox.MouseButton1Click:Connect(toggleAutoReload)
+AutoReloadLabel.MouseButton1Click:Connect(toggleAutoReload)
+
+KeybindBtn.MouseButton1Click:Connect(function()
+	IsBinding = true
+	BindingTarget = "ForceHit"
+	KeybindBtn.Text = "..."
+	KeybindBtn.TextColor3 = Color3.fromRGB(215, 60, 60)
+end)
+
+SpoofBox.MouseButton1Click:Connect(function() SpoofTextEnabled = not SpoofTextEnabled; UpdateLabels(); UpdateHvHVisuals(); SaveConfig() end)
+SpoofLabelBtn.MouseButton1Click:Connect(function() SpoofTextEnabled = not SpoofTextEnabled; UpdateLabels(); UpdateHvHVisuals(); SaveConfig() end)
+SpoofBindBtn.MouseButton1Click:Connect(function() IsBinding = true; BindingTarget = "Spoof"; SpoofBindBtn.Text = "..."; SpoofBindBtn.TextColor3 = Color3.fromRGB(215, 60, 60) end)
+
+RakBox.MouseButton1Click:Connect(function() RakTextEnabled = not RakTextEnabled; UpdateLabels(); UpdateHvHVisuals(); SaveConfig() end)
+RakLabelBtn.MouseButton1Click:Connect(function() RakTextEnabled = not RakTextEnabled; UpdateLabels(); UpdateHvHVisuals(); SaveConfig() end)
+RakBindBtn.MouseButton1Click:Connect(function() IsBinding = true; BindingTarget = "RakNet"; RakBindBtn.Text = "..."; RakBindBtn.TextColor3 = Color3.fromRGB(215, 60, 60) end)
+
+DesyncBox.MouseButton1Click:Connect(function() DesyncTextEnabled = not DesyncTextEnabled; UpdateLabels(); UpdateHvHVisuals(); SaveConfig() end)
+DesyncLabelBtn.MouseButton1Click:Connect(function() DesyncTextEnabled = not DesyncTextEnabled; UpdateLabels(); UpdateHvHVisuals(); SaveConfig() end)
+DesyncBindBtn.MouseButton1Click:Connect(function() IsBinding = true; BindingTarget = "Desync"; DesyncBindBtn.Text = "..."; DesyncBindBtn.TextColor3 = Color3.fromRGB(215, 60, 60) end)
+
+----------------------------------------------------------------------
+-- Tab Navigation Module
+----------------------------------------------------------------------
+
+local tabButtons = {
+	TextButton_2, 
+	TextButton_3, 
+	TextButton_5, 
+	TextButton_7, 
+	TextButton_8, 
+	TextButton_9, 
+	TextButton_10 
+}
+
+local buttonPages = {
+	[TextButton_2] = Frame_11,
+	[TextButton_3] = Frame_11,
+	[TextButton_5] = Frame_13,
+	[TextButton_7] = Frame_15,
+	[TextButton_8] = Frame_15,
+	[TextButton_9] = Frame_15,
+	[TextButton_10] = Frame_15,
+}
+
+local selectedButton = nil
+local SOFT_RED = Color3.fromRGB(215, 60, 60)
+local GRAY_TEXT = Color3.fromRGB(95, 90, 90)
+
+local function updateButtonVisuals(button, state)
+	if state == "Selected" or state == "Hover" then
+		button.TextColor3 = SOFT_RED
+		button.TextStrokeColor3 = SOFT_RED
+		button.TextStrokeTransparency = 0.75
+	else
+		button.TextColor3 = GRAY_TEXT
+		button.TextStrokeTransparency = 1
+	end
+end
+
+local function updatePageVisibility()
+	Frame_11.Visible = false
+	Frame_13.Visible = false
+	Frame_15.Visible = false
+
+	if selectedButton and buttonPages[selectedButton] then
+		buttonPages[selectedButton].Visible = true
+	end
+end
+
+for _, button in ipairs(tabButtons) do
+	button.BackgroundTransparency = 1
+
+	button.MouseEnter:Connect(function()
+		if selectedButton ~= button then
+			updateButtonVisuals(button, "Hover")
+		end
+	end)
+
+	button.MouseLeave:Connect(function()
+		if selectedButton ~= button then
+			updateButtonVisuals(button, "Normal")
+		end
+	end)
+
+	button.MouseButton1Click:Connect(function()
+		if selectedButton and selectedButton ~= button then
+			updateButtonVisuals(selectedButton, "Normal")
+		end
+
+		selectedButton = button
+		updateButtonVisuals(button, "Selected")
+		updatePageVisibility()
+	end)
+end
+
+----------------------------------------------------------------------
+-- Runtime Environment Load Sequence
+----------------------------------------------------------------------
+
+LoadConfig()
+updateToggleVisuals()
+UpdateHvHVisuals()
+UpdateLabels()
