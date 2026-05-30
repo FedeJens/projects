@@ -1873,3 +1873,362 @@ LoadConfig()
 updateToggleVisuals()
 UpdateHvHVisuals()
 UpdateLabels()
+
+--========================================================--
+-- ESP SYSTEM (ported/implemented from Juju style)
+-- Added under Visuals tab + Players sections
+--========================================================--
+
+local ESP = {
+    Enabled = false,
+    Box = true,
+    Name = true,
+    Highlight = true,
+    Distance = true,
+    Tracers = false
+}
+
+local espObjects = {} -- player -> {box, boxOutline, name, highlight, tracer, etc.}
+
+local function createESPForPlayer(player)
+    if player == LocalPlayer then return end
+    if espObjects[player] then return end
+
+    local objects = {}
+
+    -- Box
+    if ESP.Box then
+        objects.box = Drawing.new("Square")
+        objects.box.Thickness = 1
+        objects.box.Filled = false
+        objects.box.Color = Color3.fromRGB(255, 255, 255)
+        objects.box.Visible = false
+
+        objects.boxOutline = Drawing.new("Square")
+        objects.boxOutline.Thickness = 3
+        objects.boxOutline.Filled = false
+        objects.boxOutline.Color = Color3.fromRGB(0, 0, 0)
+        objects.boxOutline.Visible = false
+    end
+
+    -- Name + Distance
+    if ESP.Name then
+        objects.name = Drawing.new("Text")
+        objects.name.Size = 13
+        objects.name.Center = true
+        objects.name.Outline = true
+        objects.name.OutlineColor = Color3.new(0,0,0)
+        objects.name.Color = Color3.fromRGB(255, 255, 255)
+        objects.name.Visible = false
+    end
+
+    -- Tracer
+    if ESP.Tracers then
+        objects.tracer = Drawing.new("Line")
+        objects.tracer.Thickness = 1
+        objects.tracer.Color = Color3.fromRGB(255, 255, 255)
+        objects.tracer.Visible = false
+    end
+
+    -- Roblox Highlight (Chams)
+    if ESP.Highlight then
+        objects.highlight = Instance.new("Highlight")
+        objects.highlight.FillColor = Color3.fromRGB(255, 100, 100)
+        objects.highlight.FillTransparency = 0.6
+        objects.highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+        objects.highlight.OutlineTransparency = 0.3
+        objects.highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        objects.highlight.Enabled = false
+    end
+
+    espObjects[player] = objects
+end
+
+local function removeESPForPlayer(player)
+    local objects = espObjects[player]
+    if not objects then return end
+
+    for _, obj in pairs(objects) do
+        if typeof(obj) == "Instance" then
+            obj:Destroy()
+        else
+            obj:Remove()
+        end
+    end
+
+    espObjects[player] = nil
+end
+
+-- Main ESP Render Loop
+RunService.RenderStepped:Connect(function()
+    if not ESP.Enabled then
+        for player, objects in pairs(espObjects) do
+            for _, obj in pairs(objects) do
+                if typeof(obj) == "Instance" then
+                    obj.Enabled = false
+                else
+                    obj.Visible = false
+                end
+            end
+        end
+        return
+    end
+
+    for player, objects in pairs(espObjects) do
+        local char = player.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local head = char and char:FindFirstChild("Head")
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+
+        if not hrp or not head or not hum or hum.Health <= 0 then
+            for _, obj in pairs(objects) do
+                if typeof(obj) == "Instance" then
+                    obj.Enabled = false
+                else
+                    obj.Visible = false
+                end
+            end
+            continue
+        end
+
+        local pos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
+        local top, _ = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 1, 0))
+        local bottom = Camera:WorldToViewportPoint(hrp.Position - Vector3.new(0, 3, 0))
+
+        local xSize = 2000 / pos.Z
+        local ySize = 2500 / pos.Z
+        local v2Pos = Vector2.new(pos.X - xSize/2, top.Y)
+        local size = Vector2.new(xSize, bottom.Y - top.Y)
+
+        -- Box
+        if objects.box and ESP.Box then
+            objects.box.Size = size
+            objects.box.Position = v2Pos
+            objects.box.Visible = onScreen
+
+            objects.boxOutline.Size = size
+            objects.boxOutline.Position = v2Pos
+            objects.boxOutline.Visible = onScreen
+        end
+
+        -- Name + Distance
+        if objects.name and ESP.Name then
+            local dist = math.floor((hrp.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude)
+            objects.name.Text = player.Name .. " [" .. dist .. "]"
+            objects.name.Position = Vector2.new(pos.X, v2Pos.Y - 16)
+            objects.name.Visible = onScreen
+        end
+
+        -- Tracer
+        if objects.tracer and ESP.Tracers then
+            objects.tracer.From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
+            objects.tracer.To = Vector2.new(pos.X, pos.Y)
+            objects.tracer.Visible = onScreen
+        end
+
+        -- Highlight (Chams)
+        if objects.highlight and ESP.Highlight then
+            objects.highlight.Adornee = char
+            objects.highlight.Enabled = onScreen
+        end
+    end
+end)
+
+-- Player management
+local function onPlayerAdded(player)
+    if player == LocalPlayer then return end
+    createESPForPlayer(player)
+
+    player.CharacterAdded:Connect(function()
+        task.wait(0.5)
+        if ESP.Enabled then
+            removeESPForPlayer(player)
+            createESPForPlayer(player)
+        end
+    end)
+end
+
+local function onPlayerRemoving(player)
+    removeESPForPlayer(player)
+end
+
+for _, player in ipairs(Players:GetPlayers()) do
+    onPlayerAdded(player)
+end
+
+Players.PlayerAdded:Connect(onPlayerAdded)
+Players.PlayerRemoving:Connect(onPlayerRemoving)
+
+print("[FazeWare] ESP system loaded (Juju-style) - Use the UI buttons to toggle")
+
+--========================================================--
+-- ESP UI BUTTONS (added to Visuals tab + Players section)
+-- No keybinds - pure button toggles
+--========================================================--
+
+-- Helper to create a toggle button (matches existing style in the script)
+local function CreateESPToggle(parent, yOffset, labelText, defaultState, onToggle)
+    local row = Instance.new("Frame")
+    row.Name = labelText:gsub(" ", "") .. "Row"
+    row.Parent = parent
+    row.BackgroundTransparency = 1
+    row.Position = UDim2.new(0, 12, 0, yOffset)
+    row.Size = UDim2.new(1, -24, 0, 22)
+
+    local box = Instance.new("TextButton")
+    box.Name = "CheckboxBox"
+    box.Parent = row
+    box.BackgroundColor3 = defaultState and Color3.fromRGB(215, 60, 60) or Color3.fromRGB(22, 22, 22)
+    box.BorderSizePixel = 0
+    box.Position = UDim2.new(0, 0, 0.5, -5)
+    box.Size = UDim2.new(0, 12, 0, 12)
+    box.Text = ""
+    box.AutoButtonColor = false
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(55, 55, 55)
+    stroke.Thickness = 1
+    stroke.Parent = box
+
+    local label = Instance.new("TextButton")
+    label.Name = "CheckboxLabel"
+    label.Parent = row
+    label.BackgroundTransparency = 1
+    label.Position = UDim2.new(0, 18, 0, 0)
+    label.Size = UDim2.new(1, -18, 1, 0)
+    label.Font = Enum.Font.SourceSans
+    label.Text = labelText
+    label.TextColor3 = defaultState and Color3.fromRGB(230, 230, 230) or Color3.fromRGB(145, 145, 145)
+    label.TextSize = 13
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.AutoButtonColor = false
+
+    local enabled = defaultState
+
+    local function UpdateVisual()
+        box.BackgroundColor3 = enabled and Color3.fromRGB(215, 60, 60) or Color3.fromRGB(22, 22, 22)
+        label.TextColor3 = enabled and Color3.fromRGB(230, 230, 230) or Color3.fromRGB(145, 145, 145)
+    end
+
+    local function Toggle()
+        enabled = not enabled
+        UpdateVisual()
+        if onToggle then
+            onToggle(enabled)
+        end
+    end
+
+    box.MouseButton1Click:Connect(Toggle)
+    label.MouseButton1Click:Connect(Toggle)
+
+    UpdateVisual()
+
+    return {
+        Set = function(state)
+            enabled = state
+            UpdateVisual()
+            if onToggle then onToggle(enabled) end
+        end,
+        Get = function() return enabled end
+    }
+end
+
+-- === ADD ESP SECTION TO VISUALS TAB ===
+-- Parent to Frame_14 (the content frame for visuals)
+if Frame_14 then
+    local ESPGroup = Instance.new("Frame")
+    ESPGroup.Name = "ESPGroupbox"
+    ESPGroup.Parent = Frame_14
+    ESPGroup.BackgroundColor3 = Color3.fromRGB(13, 13, 13)
+    ESPGroup.BorderSizePixel = 0
+    ESPGroup.Position = UDim2.new(0, 12, 0, 30)
+    ESPGroup.Size = UDim2.new(0, 240, 0, 145)
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = ESPGroup
+
+    local topLine = Instance.new("Frame")
+    topLine.Name = "TopLine"
+    topLine.Parent = ESPGroup
+    topLine.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    topLine.BorderSizePixel = 0
+    topLine.Position = UDim2.new(0, 10, 0, 0)
+    topLine.Size = UDim2.new(1, -20, 0, 1)
+
+    local title = Instance.new("TextLabel")
+    title.Name = "GroupboxTitle"
+    title.Parent = ESPGroup
+    title.BackgroundTransparency = 1
+    title.Position = UDim2.new(0, 12, 0, 6)
+    title.Size = UDim2.new(0, 100, 0, 14)
+    title.Font = Enum.Font.SourceSans
+    title.Text = "esp"
+    title.TextColor3 = Color3.fromRGB(200, 200, 200)
+    title.TextSize = 12
+    title.TextXAlignment = Enum.TextXAlignment.Left
+
+    -- Create toggles
+    local y = 26
+    CreateESPToggle(ESPGroup, y, "Enabled", false, function(v) ESP.Enabled = v end)
+    y = y + 22
+    CreateESPToggle(ESPGroup, y, "Box", true, function(v) ESP.Box = v end)
+    y = y + 22
+    CreateESPToggle(ESPGroup, y, "Name + Distance", true, function(v) ESP.Name = v end)
+    y = y + 22
+    CreateESPToggle(ESPGroup, y, "Highlight (Chams)", true, function(v) ESP.Highlight = v end)
+    y = y + 22
+    CreateESPToggle(ESPGroup, y, "Tracers", false, function(v) ESP.Tracers = v end)
+end
+
+-- === ADD ESP SECTION TO PLAYERS TAB ===
+-- Trying to attach to a players-related frame (Frame_15 or similar)
+local playersContentFrame = Frame_16 or Frame_15 or Frame_14
+
+if playersContentFrame then
+    local PlayersESPGroup = Instance.new("Frame")
+    PlayersESPGroup.Name = "PlayersESPGroupbox"
+    PlayersESPGroup.Parent = playersContentFrame
+    PlayersESPGroup.BackgroundColor3 = Color3.fromRGB(13, 13, 13)
+    PlayersESPGroup.BorderSizePixel = 0
+    PlayersESPGroup.Position = UDim2.new(0, 12, 0, 220) -- lower position to avoid overlap
+    PlayersESPGroup.Size = UDim2.new(0, 240, 0, 120)
+
+    local corner2 = Instance.new("UICorner")
+    corner2.CornerRadius = UDim.new(0, 8)
+    corner2.Parent = PlayersESPGroup
+
+    local topLine2 = Instance.new("Frame")
+    topLine2.Name = "TopLine"
+    topLine2.Parent = PlayersESPGroup
+    topLine2.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    topLine2.BorderSizePixel = 0
+    topLine2.Position = UDim2.new(0, 10, 0, 0)
+    topLine2.Size = UDim2.new(1, -20, 0, 1)
+
+    local title2 = Instance.new("TextLabel")
+    title2.Name = "GroupboxTitle"
+    title2.Parent = PlayersESPGroup
+    title2.BackgroundTransparency = 1
+    title2.Position = UDim2.new(0, 12, 0, 6)
+    title2.Size = UDim2.new(0, 150, 0, 14)
+    title2.Font = Enum.Font.SourceSans
+    title2.Text = "esp (players)"
+    title2.TextColor3 = Color3.fromRGB(200, 200, 200)
+    title2.TextSize = 12
+    title2.TextXAlignment = Enum.TextXAlignment.Left
+
+    local y2 = 26
+    CreateESPToggle(PlayersESPGroup, y2, "ESP Enabled", false, function(v) ESP.Enabled = v end)
+    y2 = y2 + 22
+    CreateESPToggle(PlayersESPGroup, y2, "Box ESP", true, function(v) ESP.Box = v end)
+    y2 = y2 + 22
+    CreateESPToggle(PlayersESPGroup, y2, "Name ESP", true, function(v) ESP.Name = v end)
+    y2 = y2 + 22
+    CreateESPToggle(PlayersESPGroup, y2, "Highlight", true, function(v) ESP.Highlight = v end)
+end
+
+-- Sync the UI toggles with the ESP table on load
+task.delay(1, function()
+    -- You can expand this if you want the buttons to reflect current state
+end)
