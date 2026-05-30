@@ -3,7 +3,6 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
-local StarterGui = game:GetService("StarterGui")
 local CoreGui = game:GetService("CoreGui")
 local HttpService = game:GetService("HttpService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
@@ -12,49 +11,27 @@ local LocalPlayer = Players.LocalPlayer
 local Mouse = LocalPlayer:GetMouse()
 local Camera = workspace.CurrentCamera
 
--- Backend Function States
-local ForceHitActive = false
-local SpoofActive = false
-local RakActive = false
-local DesyncActive = false
-local AutoReloadActive = false
-local CFrameFlyActive = false
-local CFrameSpeedActive = false
+local ForceHitActive, SpoofActive, RakActive, DesyncActive = false, false, false, false
+local AutoReloadActive, CFrameFlyActive, CFrameSpeedActive = false, false, false
 
--- UI Overlay Text States
-local ForceHitTextEnabled = false
-local SpoofTextEnabled = false
-local RakTextEnabled = false
-local DesyncTextEnabled = false
+local ForceHitTextEnabled, SpoofTextEnabled, RakTextEnabled, DesyncTextEnabled = false, false, false, false
 
--- Flight speed variables
-local FlySpeedValue = 50
-local SpeedMultiplierValue = 2
-local CustomFlySpeed = nil
-local CustomSpeedMultiplier = nil
-local speedConnection = nil
+local FlySpeedValue, SpeedMultiplierValue = 50, 2
+local CustomFlySpeed, CustomSpeedMultiplier = nil, nil
 local originalWalkSpeed = 16
 
--- Flight system variables
-local bodyVelocity = nil
-local bodyGyro = nil
-local flyConnection = nil
+local bodyVelocity, bodyGyro, speedConnection = nil, nil, nil
 local inputFlags = {forward = false, back = false, left = false, right = false, up = false, down = false}
 
--- Configuration Keys & Settings
 local ActivationKey = Enum.KeyCode.C
 local MenuToggleKey = Enum.KeyCode.LeftAlt
 local FlyToggleKey = Enum.KeyCode.LeftShift
 local SpeedToggleKey = Enum.KeyCode.LeftControl
+
 local Config = {
 	SpoofKey = Enum.KeyCode.X,
 	RakKey = Enum.KeyCode.X,
-	DesyncKey = Enum.KeyCode.X,
-	FlySpeed = 50,
-	SpeedMultiplier = 2,
-	X = 1,
-	Y = 1,
-	Z = 1
+	DesyncKey = Enum.KeyCode.X
 }
 
 local IsFiring = false
@@ -62,19 +39,15 @@ local LockedTarget = nil
 local LastTrackedUserId = nil
 local Sleeping = false
 local IsBinding = false
-local BindingTarget = nil 
+local BindingTarget = nil
+
 local LastReloadAttempt = 0
 local ReloadCooldown = 0.5
 
--- Configuration Pathing Definitions
 local FolderName = "FazeWare_Configs"
 local FileName = FolderName .. "/default.json"
 
-----------------------------------------------------------------------
--- Auto Reload Functionality
-----------------------------------------------------------------------
-
-local function SimulateReloadKey()
+local function SimulateReload()
 	VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.R, false, game)
 	task.wait(0.05)
 	VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.R, false, game)
@@ -82,184 +55,96 @@ end
 
 local function AutoReload()
 	if not AutoReloadActive then return end
-	
-	local currentTime = tick()
-	if currentTime - LastReloadAttempt < ReloadCooldown then
-		return
-	end
-	
-	local Character = LocalPlayer.Character
-	if not Character then return end
-	
-	local Tool = Character:FindFirstChildOfClass("Tool")
-	if not Tool then return end
-	
-	local GunScript = Tool:FindFirstChild("Script")
-	if not GunScript then return end
-	
-	local Ammo = GunScript:FindFirstChild("Ammo") and GunScript.Ammo:FindFirstChild("CLIENT")
-	if not Ammo then return end
-	
-	local BodyEffects = Character:FindFirstChild("BodyEffects")
-	if not BodyEffects then return end
-	
-	local IsReloading = BodyEffects:FindFirstChild("Reloading_CLIENT") and BodyEffects.Reloading_CLIENT.Value == true
-	
-	local CanReload = true
-	if Tool.Name == "[Flintlock]" then
-		local CanReloadValue = GunScript:FindFirstChild("CAN_RELOAD")
-		if CanReloadValue then
-			CanReload = CanReloadValue.Value
-		end
-	end
-	
-	if Ammo.Value <= 0 and not IsReloading and CanReload then
-		LastReloadAttempt = currentTime
-		SimulateReloadKey()
-	end
+	if tick() - LastReloadAttempt < ReloadCooldown then return end
+
+	local char = LocalPlayer.Character
+	local tool = char and char:FindFirstChildOfClass("Tool")
+	if not tool then return end
+
+	local script = tool:FindFirstChild("Script")
+	local ammo = script and script:FindFirstChild("Ammo") and script.Ammo:FindFirstChild("CLIENT")
+	if not ammo or ammo.Value > 0 then return end
+
+	local bodyEffects = char:FindFirstChild("BodyEffects")
+	if bodyEffects and bodyEffects:FindFirstChild("Reloading_CLIENT") and bodyEffects.Reloading_CLIENT.Value then return end
+
+	LastReloadAttempt = tick()
+	SimulateReload()
 end
 
-----------------------------------------------------------------------
--- Flight Functions (Toggle version)
-----------------------------------------------------------------------
+local function GetFlySpeed() return CustomFlySpeed or FlySpeedValue end
+local function GetSpeedMult() return CustomSpeedMultiplier or SpeedMultiplierValue end
 
-local function GetFlySpeed()
-	if CustomFlySpeed and type(CustomFlySpeed) == "number" then
-		return CustomFlySpeed
-	end
-	return FlySpeedValue or 50
-end
+local function StartFly()
+	local char = LocalPlayer.Character
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	local hum = char and char:FindFirstChild("Humanoid")
+	if not root or not hum then return end
 
-local function GetSpeedMultiplier()
-	if CustomSpeedMultiplier and type(CustomSpeedMultiplier) == "number" then
-		return CustomSpeedMultiplier
-	end
-	return SpeedMultiplierValue or 2
-end
-
-local function startFlying()
-	local character = LocalPlayer.Character
-	local hrp = character and character:FindFirstChild("HumanoidRootPart")
-	local humanoid = character and character:FindFirstChild("Humanoid")
-	
-	if not hrp or not humanoid then return end
-	
 	CFrameFlyActive = true
-	
-	-- Create BodyVelocity if it doesn't exist
+
 	if not bodyVelocity then
 		bodyVelocity = Instance.new("BodyVelocity")
-		bodyVelocity.Velocity = Vector3.new(0, 0, 0)
-		bodyVelocity.MaxForce = Vector3.new(100000, 100000, 100000)
+		bodyVelocity.MaxForce = Vector3.new(1e5, 1e5, 1e5)
 	end
-	
-	-- Create BodyGyro if it doesn't exist
 	if not bodyGyro then
 		bodyGyro = Instance.new("BodyGyro")
-		bodyGyro.CFrame = hrp.CFrame
-		bodyGyro.MaxTorque = Vector3.new(100000, 100000, 100000)
+		bodyGyro.MaxTorque = Vector3.new(1e5, 1e5, 1e5)
 	end
-	
-	bodyVelocity.Parent = hrp
-	bodyGyro.Parent = hrp
-	humanoid.PlatformStand = true
+
+	bodyVelocity.Parent = root
+	bodyGyro.Parent = root
+	hum.PlatformStand = true
 end
 
-local function stopFlying()
-	local character = LocalPlayer.Character
-	local hrp = character and character:FindFirstChild("HumanoidRootPart")
-	local humanoid = character and character:FindFirstChild("Humanoid")
-	
+local function StopFly()
 	CFrameFlyActive = false
-	
-	if bodyVelocity then
-		bodyVelocity.Parent = nil
-	end
-	if bodyGyro then
-		bodyGyro.Parent = nil
-	end
-	if humanoid then
-		humanoid.PlatformStand = false
-	end
+	if bodyVelocity then bodyVelocity.Parent = nil end
+	if bodyGyro then bodyGyro.Parent = nil end
+	local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid")
+	if hum then hum.PlatformStand = false end
 end
 
--- Speed boost function (toggle version)
-local function startSpeed()
+local function ToggleFly()
+	if CFrameFlyActive then StopFly() else StartFly() end
+end
+
+local function StartSpeed()
 	CFrameSpeedActive = true
-	if speedConnection then
-		speedConnection:Disconnect()
-		speedConnection = nil
-	end
-	
+	if speedConnection then speedConnection:Disconnect() end
+
 	speedConnection = RunService.Heartbeat:Connect(function()
-		local character = LocalPlayer.Character
-		local humanoid = character and character:FindFirstChild("Humanoid")
-		
-		if not humanoid or not CFrameSpeedActive then
-			return end
-		
-		if originalWalkSpeed == 16 then
-			originalWalkSpeed = humanoid.WalkSpeed
-		end
-		
-		local speedMult = GetSpeedMultiplier()
-		humanoid.WalkSpeed = originalWalkSpeed * speedMult
+		local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid")
+		if not hum then return end
+		if originalWalkSpeed == 16 then originalWalkSpeed = hum.WalkSpeed end
+		hum.WalkSpeed = originalWalkSpeed * GetSpeedMult()
 	end)
 end
 
-local function stopSpeed()
+local function StopSpeed()
 	CFrameSpeedActive = false
-	if speedConnection then
-		speedConnection:Disconnect()
-		speedConnection = nil
-	end
-	local character = LocalPlayer.Character
-	local humanoid = character and character:FindFirstChild("Humanoid")
-	if humanoid and originalWalkSpeed then
-		humanoid.WalkSpeed = originalWalkSpeed
-	end
+	if speedConnection then speedConnection:Disconnect() end
+	local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid")
+	if hum and originalWalkSpeed then hum.WalkSpeed = originalWalkSpeed end
 end
 
--- Toggle functions
-local function toggleFly()
-	if CFrameFlyActive then
-		stopFlying()
-	else
-		startFlying()
-	end
-	-- Update UI toggle button colors
-	FlyToggleBox.BackgroundColor3 = CFrameFlyActive and Color3.fromRGB(215, 60, 60) or Color3.fromRGB(22, 22, 22)
-	FlyToggleLabel.TextColor3 = CFrameFlyActive and Color3.fromRGB(230, 230, 230) or Color3.fromRGB(145, 145, 145)
+local function ToggleSpeed()
+	if CFrameSpeedActive then StopSpeed() else StartSpeed() end
 end
-
-local function toggleSpeed()
-	if CFrameSpeedActive then
-		stopSpeed()
-	else
-		startSpeed()
-	end
-	SpeedToggleBox.BackgroundColor3 = CFrameSpeedActive and Color3.fromRGB(215, 60, 60) or Color3.fromRGB(22, 22, 22)
-	SpeedToggleLabel.TextColor3 = CFrameSpeedActive and Color3.fromRGB(230, 230, 230) or Color3.fromRGB(145, 145, 145)
-end
-
-----------------------------------------------------------------------
--- Core Cheat Environment Setup
-----------------------------------------------------------------------
 
 local BeamFolder = Instance.new("Folder")
 BeamFolder.Name = "BeamFolder"
 BeamFolder.Parent = workspace
 
-local BeamPartA = Instance.new("Part")
-local BeamPartB = Instance.new("Part")
-for _, part in ipairs({BeamPartA, BeamPartB}) do
-	part.Anchored = true
-	part.CanCollide = false
-	part.CanQuery = false
-	part.CastShadow = false
-	part.Transparency = 1
-	part.Size = Vector3.new(0.1, 0.1, 0.1)
-	part.Parent = BeamFolder
+local BeamPartA = Instance.new("Part", BeamFolder)
+local BeamPartB = Instance.new("Part", BeamFolder)
+for _, p in ipairs({BeamPartA, BeamPartB}) do
+	p.Anchored = true
+	p.CanCollide = false
+	p.CanQuery = false
+	p.CastShadow = false
+	p.Transparency = 1
+	p.Size = Vector3.new(0.1, 0.1, 0.1)
 end
 
 local AttachmentA = Instance.new("Attachment", BeamPartA)
@@ -372,7 +257,6 @@ local HealthBarCorner = Instance.new("UICorner")
 HealthBarCorner.CornerRadius = UDim.new(1, 0)
 HealthBarCorner.Parent = HealthBar
 
--- Combined Status Overlay Setup
 local CombinedStatusGui = Instance.new("ScreenGui")
 CombinedStatusGui.Name = "CombinedStatusGui"
 CombinedStatusGui.ResetOnSpawn = false
@@ -413,96 +297,61 @@ end
 
 UpdateLabels()
 
-----------------------------------------------------------------------
--- Base Framework UI Generation
-----------------------------------------------------------------------
-
 local FazeWare = Instance.new("ScreenGui")
-local Frame = Instance.new("Frame")
-local UICorner = Instance.new("UICorner")
-local Frame_2 = Instance.new("Frame")
-local UICorner_2 = Instance.new("UICorner")
-local Frame_3 = Instance.new("Frame")
-local Frame_4 = Instance.new("Frame")
-local Frame_5 = Instance.new("Frame")
-local Frame_6 = Instance.new("Frame")
-local TextLabel = Instance.new("TextLabel")
-local CloseButton = Instance.new("TextButton")
-local UICorner_3 = Instance.new("UICorner")
-local Minimizebutton = Instance.new("TextButton")
-local UICorner_4 = Instance.new("UICorner")
-local Fullscreenbutton = Instance.new("TextButton")
-local UICorner_5 = Instance.new("UICorner")
-local Frame_7 = Instance.new("Frame")
-local UICorner_6 = Instance.new("UICorner")
-local TextButton = Instance.new("TextButton")
-local Frame_8 = Instance.new("Frame")
-local TextButton_2 = Instance.new("TextButton")
-local TextButton_3 = Instance.new("TextButton")
-local TextButton_4 = Instance.new("TextButton")
-local Frame_9 = Instance.new("Frame")
-local TextButton_5 = Instance.new("TextButton")
-local TextButton_6 = Instance.new("TextButton")
-local Frame_10 = Instance.new("Frame")
-local TextButton_7 = Instance.new("TextButton")
-local TextButton_8 = Instance.new("TextButton")
-local TextButton_9 = Instance.new("TextButton")
-local TextButton_10 = Instance.new("TextButton")
-local Frame_11 = Instance.new("Frame")
-local Frame_12 = Instance.new("Frame")
-local TextLabel_2 = Instance.new("TextLabel")
-local Frame_13 = Instance.new("Frame")
-local Frame_14 = Instance.new("Frame")
-local TextLabel_3 = Instance.new("TextLabel")
-local Frame_15 = Instance.new("Frame")
-local Frame_16 = Instance.new("Frame")
-local TextLabel_4 = Instance.new("TextLabel")
-
 FazeWare.Name = "FazeWare"
 FazeWare.Parent = LocalPlayer:WaitForChild("PlayerGui")
 FazeWare.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 FazeWare.ResetOnSpawn = false
 
+local Frame = Instance.new("Frame")
 Frame.Parent = FazeWare
 Frame.BackgroundColor3 = Color3.new(0.0509804, 0.0509804, 0.0509804)
 Frame.BorderSizePixel = 0
 Frame.Position = UDim2.new(0.5, -310, 0.5, -250)
 Frame.Size = UDim2.new(0, 620, 0, 500)
 
-UICorner.Parent = Frame
+local UICorner = Instance.new("UICorner")
 UICorner.CornerRadius = UDim.new(0, 14)
+UICorner.Parent = Frame
 
+local Frame_2 = Instance.new("Frame")
 Frame_2.Name = "TopBar"
 Frame_2.Parent = Frame
 Frame_2.BackgroundColor3 = Color3.new(0.0784314, 0.0784314, 0.0784314)
 Frame_2.BorderSizePixel = 0
 Frame_2.Size = UDim2.new(1, 0, 0, 32)
 
-UICorner_2.Parent = Frame_2
+local UICorner_2 = Instance.new("UICorner")
 UICorner_2.CornerRadius = UDim.new(0, 6)
+UICorner_2.Parent = Frame_2
 
+local Frame_3 = Instance.new("Frame")
 Frame_3.Parent = Frame_2
 Frame_3.BackgroundTransparency = 1
 Frame_3.BorderSizePixel = 0
 Frame_3.Position = UDim2.new(0, 7, 0, 6)
 Frame_3.Size = UDim2.new(0, 20, 0, 20)
 
+local Frame_4 = Instance.new("Frame")
 Frame_4.Parent = Frame_3
 Frame_4.BackgroundColor3 = Color3.new(0.607843, 0.0862745, 0.0862745)
 Frame_4.BorderSizePixel = 0
 Frame_4.Size = UDim2.new(0, 20, 0, 4)
 
+local Frame_5 = Instance.new("Frame")
 Frame_5.Parent = Frame_3
 Frame_5.BackgroundColor3 = Color3.new(0.607843, 0.0862745, 0.0862745)
 Frame_5.BorderSizePixel = 0
 Frame_5.Size = UDim2.new(0, 4, 0, 20)
 
+local Frame_6 = Instance.new("Frame")
 Frame_6.Parent = Frame_3
 Frame_6.BackgroundColor3 = Color3.new(0.607843, 0.0862745, 0.0862745)
 Frame_6.BorderSizePixel = 0
 Frame_6.Position = UDim2.new(0, 0, 0, 8)
 Frame_6.Size = UDim2.new(0, 13, 0, 4)
 
+local TextLabel = Instance.new("TextLabel")
 TextLabel.Parent = Frame_2
 TextLabel.BackgroundTransparency = 1
 TextLabel.Position = UDim2.new(0, 22, 0, 2)
@@ -513,6 +362,7 @@ TextLabel.TextColor3 = Color3.new(0.607843, 0.0862745, 0.0862745)
 TextLabel.TextSize = 19
 TextLabel.TextXAlignment = Enum.TextXAlignment.Left
 
+local CloseButton = Instance.new("TextButton")
 CloseButton.Name = "CloseButton"
 CloseButton.Parent = Frame_2
 CloseButton.BackgroundColor3 = Color3.new(0.509804, 0.0705882, 0.0705882)
@@ -523,9 +373,11 @@ CloseButton.Font = Enum.Font.SourceSansBold
 CloseButton.Text = ""
 CloseButton.TextSize = 12
 
-UICorner_3.Parent = CloseButton
+local UICorner_3 = Instance.new("UICorner")
 UICorner_3.CornerRadius = UDim.new(1, 0)
+UICorner_3.Parent = CloseButton
 
+local Minimizebutton = Instance.new("TextButton")
 Minimizebutton.Name = "Minimizebutton"
 Minimizebutton.Parent = Frame_2
 Minimizebutton.BackgroundColor3 = Color3.new(0.196078, 0.196078, 0.196078)
@@ -536,9 +388,11 @@ Minimizebutton.Font = Enum.Font.SourceSansBold
 Minimizebutton.Text = ""
 Minimizebutton.TextSize = 12
 
-UICorner_4.Parent = Minimizebutton
+local UICorner_4 = Instance.new("UICorner")
 UICorner_4.CornerRadius = UDim.new(1, 0)
+UICorner_4.Parent = Minimizebutton
 
+local Fullscreenbutton = Instance.new("TextButton")
 Fullscreenbutton.Name = "Fullscreenbutton"
 Fullscreenbutton.Parent = Frame_2
 Fullscreenbutton.BackgroundColor3 = Color3.new(0.14902, 0.14902, 0.14902)
@@ -549,17 +403,21 @@ Fullscreenbutton.Font = Enum.Font.SourceSansBold
 Fullscreenbutton.Text = ""
 Fullscreenbutton.TextSize = 12
 
-UICorner_5.Parent = Fullscreenbutton
+local UICorner_5 = Instance.new("UICorner")
 UICorner_5.CornerRadius = UDim.new(1, 0)
+UICorner_5.Parent = Fullscreenbutton
 
+local Frame_7 = Instance.new("Frame")
 Frame_7.Parent = Frame
 Frame_7.BackgroundColor3 = Color3.new(0.0705882, 0.0705882, 0.0705882)
 Frame_7.BorderSizePixel = 0
 Frame_7.Position = UDim2.new(0, 0, 0, 32)
 Frame_7.Size = UDim2.new(0, 72, 1, -32)
 
+local UICorner_6 = Instance.new("UICorner")
 UICorner_6.Parent = Frame_7
 
+local TextButton = Instance.new("TextButton")
 TextButton.Parent = Frame_7
 TextButton.BackgroundTransparency = 1
 TextButton.BorderSizePixel = 0
@@ -571,12 +429,14 @@ TextButton.TextColor3 = Color3.new(0.607843, 0.0862745, 0.0862745)
 TextButton.TextSize = 12
 TextButton.TextXAlignment = Enum.TextXAlignment.Left
 
+local Frame_8 = Instance.new("Frame")
 Frame_8.Parent = Frame_7
 Frame_8.BackgroundColor3 = Color3.new(0.509804, 0.0705882, 0.0705882)
 Frame_8.BorderSizePixel = 0
 Frame_8.Position = UDim2.new(0, 5, 0, 31)
 Frame_8.Size = UDim2.new(1, -10, 0, 1)
 
+local TextButton_2 = Instance.new("TextButton")
 TextButton_2.Parent = Frame_7
 TextButton_2.BackgroundTransparency = 1
 TextButton_2.BorderSizePixel = 0
@@ -588,6 +448,7 @@ TextButton_2.TextColor3 = Color3.new(0.372549, 0.352941, 0.352941)
 TextButton_2.TextSize = 11
 TextButton_2.TextXAlignment = Enum.TextXAlignment.Left
 
+local TextButton_3 = Instance.new("TextButton")
 TextButton_3.Parent = Frame_7
 TextButton_3.BackgroundTransparency = 1
 TextButton_3.BorderSizePixel = 0
@@ -599,6 +460,7 @@ TextButton_3.TextColor3 = Color3.new(0.372549, 0.352941, 0.352941)
 TextButton_3.TextSize = 11
 TextButton_3.TextXAlignment = Enum.TextXAlignment.Left
 
+local TextButton_4 = Instance.new("TextButton")
 TextButton_4.Parent = Frame_7
 TextButton_4.BackgroundTransparency = 1
 TextButton_4.BorderSizePixel = 0
@@ -610,12 +472,14 @@ TextButton_4.TextColor3 = Color3.new(0.607843, 0.0862745, 0.0862745)
 TextButton_4.TextSize = 12
 TextButton_4.TextXAlignment = Enum.TextXAlignment.Left
 
+local Frame_9 = Instance.new("Frame")
 Frame_9.Parent = Frame_7
 Frame_9.BackgroundColor3 = Color3.new(0.509804, 0.0705882, 0.0705882)
 Frame_9.BorderSizePixel = 0
 Frame_9.Position = UDim2.new(0, 5, 0, 104)
 Frame_9.Size = UDim2.new(1, -10, 0, 1)
 
+local TextButton_5 = Instance.new("TextButton")
 TextButton_5.Parent = Frame_7
 TextButton_5.BackgroundTransparency = 1
 TextButton_5.BorderSizePixel = 0
@@ -627,6 +491,7 @@ TextButton_5.TextColor3 = Color3.new(0.372549, 0.352941, 0.352941)
 TextButton_5.TextSize = 11
 TextButton_5.TextXAlignment = Enum.TextXAlignment.Left
 
+local TextButton_6 = Instance.new("TextButton")
 TextButton_6.Parent = Frame_7
 TextButton_6.BackgroundTransparency = 1
 TextButton_6.BorderSizePixel = 0
@@ -638,12 +503,14 @@ TextButton_6.TextColor3 = Color3.new(0.607843, 0.0862745, 0.0862745)
 TextButton_6.TextSize = 12
 TextButton_6.TextXAlignment = Enum.TextXAlignment.Left
 
+local Frame_10 = Instance.new("Frame")
 Frame_10.Parent = Frame_7
 Frame_10.BackgroundColor3 = Color3.new(0.509804, 0.0705882, 0.0705882)
 Frame_10.BorderSizePixel = 0
 Frame_10.Position = UDim2.new(0, 5, 0, 158)
 Frame_10.Size = UDim2.new(1, -10, 0, 1)
 
+local TextButton_7 = Instance.new("TextButton")
 TextButton_7.Parent = Frame_7
 TextButton_7.BackgroundTransparency = 1
 TextButton_7.BorderSizePixel = 0
@@ -655,6 +522,7 @@ TextButton_7.TextColor3 = Color3.new(0.372549, 0.352941, 0.352941)
 TextButton_7.TextSize = 11
 TextButton_7.TextXAlignment = Enum.TextXAlignment.Left
 
+local TextButton_8 = Instance.new("TextButton")
 TextButton_8.Parent = Frame_7
 TextButton_8.BackgroundTransparency = 1
 TextButton_8.BorderSizePixel = 0
@@ -666,6 +534,7 @@ TextButton_8.TextColor3 = Color3.new(0.372549, 0.352941, 0.352941)
 TextButton_8.TextSize = 11
 TextButton_8.TextXAlignment = Enum.TextXAlignment.Left
 
+local TextButton_9 = Instance.new("TextButton")
 TextButton_9.Parent = Frame_7
 TextButton_9.BackgroundTransparency = 1
 TextButton_9.BorderSizePixel = 0
@@ -677,6 +546,7 @@ TextButton_9.TextColor3 = Color3.new(0.372549, 0.352941, 0.352941)
 TextButton_9.TextSize = 11
 TextButton_9.TextXAlignment = Enum.TextXAlignment.Left
 
+local TextButton_10 = Instance.new("TextButton")
 TextButton_10.Parent = Frame_7
 TextButton_10.BackgroundTransparency = 1
 TextButton_10.BorderSizePixel = 0
@@ -688,7 +558,7 @@ TextButton_10.TextColor3 = Color3.new(0.372549, 0.352941, 0.352941)
 TextButton_10.TextSize = 11
 TextButton_10.TextXAlignment = Enum.TextXAlignment.Left
 
--- Container Pages Setup
+local Frame_11 = Instance.new("Frame")
 Frame_11.Parent = Frame
 Frame_11.BackgroundTransparency = 1
 Frame_11.BorderSizePixel = 0
@@ -697,11 +567,13 @@ Frame_11.Position = UDim2.new(0, 76, 0, 34)
 Frame_11.Size = UDim2.new(1, -80, 1, -36)
 Frame_11.Visible = false
 
+local Frame_12 = Instance.new("Frame")
 Frame_12.Parent = Frame_11
 Frame_12.BackgroundTransparency = 1
 Frame_12.BorderSizePixel = 0
 Frame_12.Size = UDim2.new(1, 0, 0, 2000)
 
+local TextLabel_2 = Instance.new("TextLabel")
 TextLabel_2.Parent = Frame_12
 TextLabel_2.BackgroundTransparency = 1
 TextLabel_2.Position = UDim2.new(0, 2, 0, 4)
@@ -712,6 +584,7 @@ TextLabel_2.TextColor3 = Color3.new(0.607843, 0.0862745, 0.0862745)
 TextLabel_2.TextSize = 11
 TextLabel_2.TextXAlignment = Enum.TextXAlignment.Left
 
+local Frame_13 = Instance.new("Frame")
 Frame_13.Parent = Frame
 Frame_13.BackgroundTransparency = 1
 Frame_13.BorderSizePixel = 0
@@ -720,11 +593,13 @@ Frame_13.Position = UDim2.new(0, 76, 0, 34)
 Frame_13.Size = UDim2.new(1, -80, 1, -36)
 Frame_13.Visible = false
 
+local Frame_14 = Instance.new("Frame")
 Frame_14.Parent = Frame_13
 Frame_14.BackgroundTransparency = 1
 Frame_14.BorderSizePixel = 0
 Frame_14.Size = UDim2.new(1, 0, 0, 2000)
 
+local TextLabel_3 = Instance.new("TextLabel")
 TextLabel_3.Parent = Frame_14
 TextLabel_3.BackgroundTransparency = 1
 TextLabel_3.Position = UDim2.new(0, 2, 0, 4)
@@ -735,6 +610,7 @@ TextLabel_3.TextColor3 = Color3.new(0.607843, 0.0862745, 0.0862745)
 TextLabel_3.TextSize = 11
 TextLabel_3.TextXAlignment = Enum.TextXAlignment.Left
 
+local Frame_15 = Instance.new("Frame")
 Frame_15.Parent = Frame
 Frame_15.BackgroundTransparency = 1
 Frame_15.BorderSizePixel = 0
@@ -743,11 +619,13 @@ Frame_15.Position = UDim2.new(0, 76, 0, 34)
 Frame_15.Size = UDim2.new(1, -80, 1, -36)
 Frame_15.Visible = false
 
+local Frame_16 = Instance.new("Frame")
 Frame_16.Parent = Frame_15
 Frame_16.BackgroundTransparency = 1
 Frame_16.BorderSizePixel = 0
 Frame_16.Size = UDim2.new(1, 0, 0, 2000)
 
+local TextLabel_4 = Instance.new("TextLabel")
 TextLabel_4.Parent = Frame_16
 TextLabel_4.BackgroundTransparency = 1
 TextLabel_4.Position = UDim2.new(0, 2, 0, 4)
@@ -758,14 +636,7 @@ TextLabel_4.TextColor3 = Color3.new(0.607843, 0.0862745, 0.0862745)
 TextLabel_4.TextSize = 11
 TextLabel_4.TextXAlignment = Enum.TextXAlignment.Left
 
-----------------------------------------------------------------------
--- Draggable UI
-----------------------------------------------------------------------
-
-local dragging
-local dragInput
-local dragStart
-local startPos
+local dragging, dragInput, dragStart, startPos
 
 local function update(input)
 	local delta = input.Position - dragStart
@@ -777,7 +648,6 @@ Frame_2.InputBegan:Connect(function(input)
 		dragging = true
 		dragStart = input.Position
 		startPos = Frame.Position
-
 		input.Changed:Connect(function()
 			if input.UserInputState == Enum.UserInputState.End then
 				dragging = false
@@ -797,10 +667,6 @@ UserInputService.InputChanged:Connect(function(input)
 		update(input)
 	end
 end)
-
-----------------------------------------------------------------------
--- Section 1: "rage"
-----------------------------------------------------------------------
 
 local RageGroupbox = Instance.new("Frame")
 RageGroupbox.Name = "RageGroupbox"
@@ -834,7 +700,6 @@ GroupboxTitle.TextColor3 = Color3.fromRGB(200, 200, 200)
 GroupboxTitle.TextSize = 12
 GroupboxTitle.TextXAlignment = Enum.TextXAlignment.Left
 
--- Force Hit Checkbox
 local ToggleRow = Instance.new("Frame")
 ToggleRow.Name = "ToggleRow"
 ToggleRow.Parent = RageGroupbox
@@ -868,7 +733,6 @@ CheckboxLabel.TextColor3 = Color3.fromRGB(145, 145, 145)
 CheckboxLabel.TextSize = 13
 CheckboxLabel.TextXAlignment = Enum.TextXAlignment.Left
 
--- Target Keybind
 local BindRow = Instance.new("Frame")
 BindRow.Name = "BindRow"
 BindRow.Parent = RageGroupbox
@@ -907,7 +771,6 @@ KeybindStroke.Color = Color3.fromRGB(42, 42, 42)
 KeybindStroke.Thickness = 1
 KeybindStroke.Parent = KeybindBtn
 
--- Auto Reload Checkbox
 local AutoReloadRow = Instance.new("Frame")
 AutoReloadRow.Name = "AutoReloadRow"
 AutoReloadRow.Parent = RageGroupbox
@@ -941,7 +804,6 @@ AutoReloadLabel.TextColor3 = Color3.fromRGB(145, 145, 145)
 AutoReloadLabel.TextSize = 13
 AutoReloadLabel.TextXAlignment = Enum.TextXAlignment.Left
 
--- Fly Speed Slider
 local FlySpeedRow = Instance.new("Frame")
 FlySpeedRow.Name = "FlySpeedRow"
 FlySpeedRow.Parent = RageGroupbox
@@ -983,7 +845,6 @@ FlySpeedTextBox.Text = ""
 FlySpeedTextBox.TextColor3 = Color3.fromRGB(130, 130, 130)
 FlySpeedTextBox.TextSize = 11
 
--- Speed Multiplier Slider
 local SpeedMultRow = Instance.new("Frame")
 SpeedMultRow.Name = "SpeedMultRow"
 SpeedMultRow.Parent = RageGroupbox
@@ -1025,7 +886,6 @@ SpeedMultTextBox.Text = ""
 SpeedMultTextBox.TextColor3 = Color3.fromRGB(130, 130, 130)
 SpeedMultTextBox.TextSize = 11
 
--- CFrame Fly Toggle
 local FlyToggleRow = Instance.new("Frame")
 FlyToggleRow.Name = "FlyToggleRow"
 FlyToggleRow.Parent = RageGroupbox
@@ -1065,7 +925,6 @@ FlyKeybindBtn.Text = "LSHIFT"
 FlyKeybindBtn.TextColor3 = Color3.fromRGB(130, 130, 130)
 FlyKeybindBtn.TextSize = 11
 
--- CFrame Speed Toggle
 local SpeedToggleRow = Instance.new("Frame")
 SpeedToggleRow.Name = "SpeedToggleRow"
 SpeedToggleRow.Parent = RageGroupbox
@@ -1105,7 +964,6 @@ SpeedKeybindBtn.Text = "LCTRL"
 SpeedKeybindBtn.TextColor3 = Color3.fromRGB(130, 130, 130)
 SpeedKeybindBtn.TextSize = 11
 
--- Slider update functions
 local function UpdateFlySpeed(value)
 	value = math.clamp(value, 1, 500)
 	FlySpeedValue = value
@@ -1122,7 +980,6 @@ local function UpdateSpeedMultiplier(value)
 	SpeedMultTextBox.Text = ""
 end
 
--- Slider click handlers
 FlySpeedSliderBtn.MouseButton1Click:Connect(function()
 	IsBinding = true
 	BindingTarget = "FlySpeed"
@@ -1137,7 +994,6 @@ SpeedMultSliderBtn.MouseButton1Click:Connect(function()
 	SpeedMultSliderBtn.TextColor3 = Color3.fromRGB(215, 60, 60)
 end)
 
--- Text box handlers
 FlySpeedTextBox.FocusLost:Connect(function()
 	local num = tonumber(FlySpeedTextBox.Text)
 	if num then
@@ -1160,11 +1016,9 @@ SpeedMultTextBox.FocusLost:Connect(function()
 	end
 end)
 
--- Fly Toggle (UI button)
-FlyToggleBox.MouseButton1Click:Connect(toggleFly)
-FlyToggleLabel.MouseButton1Click:Connect(toggleFly)
+FlyToggleBox.MouseButton1Click:Connect(ToggleFly)
+FlyToggleLabel.MouseButton1Click:Connect(ToggleFly)
 
--- Fly Keybind (Toggle)
 FlyKeybindBtn.MouseButton1Click:Connect(function()
 	IsBinding = true
 	BindingTarget = "FlyKeybind"
@@ -1172,11 +1026,9 @@ FlyKeybindBtn.MouseButton1Click:Connect(function()
 	FlyKeybindBtn.TextColor3 = Color3.fromRGB(215, 60, 60)
 end)
 
--- Speed Toggle (UI button)
-SpeedToggleBox.MouseButton1Click:Connect(toggleSpeed)
-SpeedToggleLabel.MouseButton1Click:Connect(toggleSpeed)
+SpeedToggleBox.MouseButton1Click:Connect(ToggleSpeed)
+SpeedToggleLabel.MouseButton1Click:Connect(ToggleSpeed)
 
--- Speed Keybind (Toggle)
 SpeedKeybindBtn.MouseButton1Click:Connect(function()
 	IsBinding = true
 	BindingTarget = "SpeedKeybind"
@@ -1184,51 +1036,36 @@ SpeedKeybindBtn.MouseButton1Click:Connect(function()
 	SpeedKeybindBtn.TextColor3 = Color3.fromRGB(215, 60, 60)
 end)
 
-----------------------------------------------------------------------
--- Flight RenderStepped Connection (Camera-relative movement)
-----------------------------------------------------------------------
+RunService.RenderStepped:Connect(function()
+	if not CFrameFlyActive then return end
+	local char = LocalPlayer.Character
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	if not root then return end
 
-flyConnection = RunService.RenderStepped:Connect(function(deltaTime)
-	if CFrameFlyActive then
-		local character = LocalPlayer.Character
-		local hrp = character and character:FindFirstChild("HumanoidRootPart")
-		
-		if not hrp then return end
-		
-		local moveDirection = Vector3.new(0, 0, 0)
-		local camCF = Camera.CFrame
-		
-		-- Update input flags from keyboard (always reading for movement)
-		inputFlags.forward = UserInputService:IsKeyDown(Enum.KeyCode.W)
-		inputFlags.back = UserInputService:IsKeyDown(Enum.KeyCode.S)
-		inputFlags.left = UserInputService:IsKeyDown(Enum.KeyCode.A)
-		inputFlags.right = UserInputService:IsKeyDown(Enum.KeyCode.D)
-		inputFlags.up = UserInputService:IsKeyDown(Enum.KeyCode.Space)
-		inputFlags.down = UserInputService:IsKeyDown(Enum.KeyCode.LeftControl)
-		
-		if inputFlags.forward then moveDirection = moveDirection + camCF.LookVector end
-		if inputFlags.back then moveDirection = moveDirection - camCF.LookVector end
-		if inputFlags.left then moveDirection = moveDirection - camCF.RightVector end
-		if inputFlags.right then moveDirection = moveDirection + camCF.RightVector end
-		if inputFlags.up then moveDirection = moveDirection + Vector3.new(0, 1, 0) end
-		if inputFlags.down then moveDirection = moveDirection - Vector3.new(0, 1, 0) end
-		
-		if moveDirection.Magnitude > 0 then
-			moveDirection = moveDirection.Unit
-		end
-		
-		if bodyVelocity then
-			bodyVelocity.Velocity = moveDirection * GetFlySpeed()
-		end
-		if bodyGyro then
-			bodyGyro.CFrame = camCF
-		end
+	local moveDirection = Vector3.new(0, 0, 0)
+	local camCF = Camera.CFrame
+
+	inputFlags.forward = UserInputService:IsKeyDown(Enum.KeyCode.W)
+	inputFlags.back = UserInputService:IsKeyDown(Enum.KeyCode.S)
+	inputFlags.left = UserInputService:IsKeyDown(Enum.KeyCode.A)
+	inputFlags.right = UserInputService:IsKeyDown(Enum.KeyCode.D)
+	inputFlags.up = UserInputService:IsKeyDown(Enum.KeyCode.Space)
+	inputFlags.down = UserInputService:IsKeyDown(Enum.KeyCode.LeftControl)
+
+	if inputFlags.forward then moveDirection += camCF.LookVector end
+	if inputFlags.back then moveDirection -= camCF.LookVector end
+	if inputFlags.left then moveDirection -= camCF.RightVector end
+	if inputFlags.right then moveDirection += camCF.RightVector end
+	if inputFlags.up then moveDirection += Vector3.new(0, 1, 0) end
+	if inputFlags.down then moveDirection -= Vector3.new(0, 1, 0) end
+
+	if moveDirection.Magnitude > 0 then
+		moveDirection = moveDirection.Unit
 	end
-end)
 
-----------------------------------------------------------------------
--- Section 2: "hvh"
-----------------------------------------------------------------------
+	if bodyVelocity then bodyVelocity.Velocity = moveDirection * GetFlySpeed() end
+	if bodyGyro then bodyGyro.CFrame = camCF end
+end)
 
 local HvHGroupbox = Instance.new("Frame")
 HvHGroupbox.Name = "HvHGroupbox"
@@ -1323,13 +1160,8 @@ local SpoofBox, SpoofLabelBtn, SpoofBindBtn = CreateConfigRow(HvHGroupbox, "spoo
 local RakBox, RakLabelBtn, RakBindBtn = CreateConfigRow(HvHGroupbox, "raknet", 56, Config.RakKey.Name)
 local DesyncBox, DesyncLabelBtn, DesyncBindBtn = CreateConfigRow(HvHGroupbox, "desync", 84, Config.DesyncKey.Name)
 
-----------------------------------------------------------------------
--- Config System
-----------------------------------------------------------------------
-
 local function SaveConfig()
 	if not writefile then return end
-
 	local configData = {
 		ActivationKey = ActivationKey.Name,
 		SpoofKey = Config.SpoofKey.Name,
@@ -1345,11 +1177,7 @@ local function SaveConfig()
 		FlyToggleKey = FlyToggleKey.Name,
 		SpeedToggleKey = SpeedToggleKey.Name
 	}
-
-	local success, encoded = pcall(function()
-		return HttpService:JSONEncode(configData)
-	end)
-
+	local success, encoded = pcall(function() return HttpService:JSONEncode(configData) end)
 	if success then
 		if makefolder then pcall(function() makefolder(FolderName) end) end
 		writefile(FileName, encoded)
@@ -1360,24 +1188,22 @@ local function LoadConfig()
 	if not isfile or not readfile then return end
 	if not isfile(FileName) then return end
 
-	local success, content = pcall(function()
-		return readfile(FileName)
-	end)
-
+	local success, content = pcall(function() return readfile(FileName) end)
 	if success then
-		local decodeSuccess, decoded = pcall(function()
-			return HttpService:JSONDecode(content)
-		end)
-
+		local decodeSuccess, decoded = pcall(function() return HttpService:JSONDecode(content) end)
 		if decodeSuccess and decoded then
 			if decoded.ActivationKey then ActivationKey = Enum.KeyCode[decoded.ActivationKey] end
 			if decoded.SpoofKey then Config.SpoofKey = Enum.KeyCode[decoded.SpoofKey] end
 			if decoded.RakKey then Config.RakKey = Enum.KeyCode[decoded.RakKey] end
 			if decoded.DesyncKey then Config.DesyncKey = Enum.KeyCode[decoded.DesyncKey] end
-			if decoded.FlyToggleKey then FlyToggleKey = Enum.KeyCode[decoded.FlyToggleKey] 
-				FlyKeybindBtn.Text = FlyToggleKey.Name end
-			if decoded.SpeedToggleKey then SpeedToggleKey = Enum.KeyCode[decoded.SpeedToggleKey]
-				SpeedKeybindBtn.Text = SpeedToggleKey.Name end
+			if decoded.FlyToggleKey then 
+				FlyToggleKey = Enum.KeyCode[decoded.FlyToggleKey]
+				FlyKeybindBtn.Text = FlyToggleKey.Name 
+			end
+			if decoded.SpeedToggleKey then 
+				SpeedToggleKey = Enum.KeyCode[decoded.SpeedToggleKey]
+				SpeedKeybindBtn.Text = SpeedToggleKey.Name 
+			end
 
 			ForceHitTextEnabled = decoded.ForceHitTextEnabled or false
 			SpoofTextEnabled = decoded.SpoofTextEnabled or false
@@ -1395,10 +1221,6 @@ local function LoadConfig()
 		end
 	end
 end
-
-----------------------------------------------------------------------
--- Target Mechanism & Backend Loops
-----------------------------------------------------------------------
 
 local function SetNoTarget()
 	NameLabel.Text = "No Target"
@@ -1420,9 +1242,7 @@ local function GetPlayerClosestToMouse()
 	local MyTorso = Character and Character:FindFirstChild("UpperTorso")
 	if not MyTorso then return nil, 0 end
 
-	local ClosestPlayer = nil
-	local ClosestScreenDist = math.huge
-	local ClosestWorldDist = 0
+	local ClosestPlayer, ClosestScreenDist, ClosestWorldDist = nil, math.huge, 0
 
 	for _, Player in ipairs(Players:GetPlayers()) do
 		if Player ~= LocalPlayer and Player.Character then
@@ -1443,7 +1263,6 @@ local function GetPlayerClosestToMouse()
 						RayParams.FilterDescendantsInstances = { workspace.Ignored, workspace.Players, Character }
 
 						local WallCheck = workspace:Raycast(MyTorso.Position, RayDirection, RayParams)
-
 						if not WallCheck then
 							ClosestScreenDist = ScreenDist
 							ClosestWorldDist = WorldDist
@@ -1454,17 +1273,14 @@ local function GetPlayerClosestToMouse()
 			end
 		end
 	end
-
 	return ClosestPlayer, ClosestWorldDist
 end
 
 local function FireWeaponAtTarget()
 	if not ForceHitActive or not LockedTarget then return end
-
 	local Character = LocalPlayer.Character
 	local Tool = Character and Character:FindFirstChildOfClass("Tool")
 	if not Tool then return end
-	
 	if HasForceField(LockedTarget) then return end
 
 	local Handle = Tool:FindFirstChild("Handle")
@@ -1477,9 +1293,7 @@ local function FireWeaponAtTarget()
 	end
 
 	local BodyEffects = Character:FindFirstChild("BodyEffects")
-	if BodyEffects and BodyEffects:FindFirstChild("Reloading_CLIENT") and BodyEffects.Reloading_CLIENT.Value == true then
-		return
-	end
+	if BodyEffects and BodyEffects:FindFirstChild("Reloading_CLIENT") and BodyEffects.Reloading_CLIENT.Value then return end
 
 	local IsShotgun = Tool.Name == "[DoubleBarrel]" or Tool.Name == "[Shotgun]" or Tool.Name == "[TacticalShotgun]"
 
@@ -1506,7 +1320,6 @@ local function FireWeaponAtTarget()
 
 	local RayHitTable = {}
 	local OffsetTable = {}
-
 	local ShotgunPelletSpreadFactors = { -1.35, -0.9, 0.25, 0.55, 1 }
 	local RayCount = IsShotgun and 5 or 1
 
@@ -1515,14 +1328,10 @@ local function FireWeaponAtTarget()
 	local Multiplier = LocalRandomGenerator:NextNumber(0, 5.75)
 	local DirectSign = (LocalRandomGenerator:NextInteger(0, 1) == 1) and 1 or -1
 	local CalculatedSpread = Multiplier * DirectSign
-
-	if CalculatedSpread > -0.35 and CalculatedSpread < 0.35 then
-		CalculatedSpread = 0.35
-	end
+	if CalculatedSpread > -0.35 and CalculatedSpread < 0.35 then CalculatedSpread = 0.35 end
 
 	for i = 1, RayCount do
 		local FinalSimulatedHitPos = BasePosition
-
 		if IsShotgun then
 			local SpreadAngle = ShotgunPelletSpreadFactors[i] * CalculatedSpread
 			local SpreadCFrame = CFrame.new(OriginPosition, BasePosition) * AngleRotation * CFrame.Angles(math.rad(SpreadAngle), 0, 0)
@@ -1531,22 +1340,13 @@ local function FireWeaponAtTarget()
 
 		local CalculatedNormal = (OriginPosition - FinalSimulatedHitPos).Unit
 
-		table.insert(RayHitTable, {
-			Instance = TargetRoot,
-			Position = FinalSimulatedHitPos,
-			Normal = CalculatedNormal
-		})
-
-		table.insert(OffsetTable, {
-			thePart = TargetRoot,
-			theOffset = TargetRoot.CFrame:PointToObjectSpace(FinalSimulatedHitPos)
-		})
+		table.insert(RayHitTable, { Instance = TargetRoot, Position = FinalSimulatedHitPos, Normal = CalculatedNormal })
+		table.insert(OffsetTable, { thePart = TargetRoot, theOffset = TargetRoot.CFrame:PointToObjectSpace(FinalSimulatedHitPos) })
 	end
 
 	if TargetHum then
 		local BaseDamage = (Tool.Name == "[DoubleBarrel]") and 14 or 20
 		local TotalDamage = IsShotgun and (BaseDamage * 5) or BaseDamage
-
 		if TargetHum.Health - TotalDamage < 0.5 then
 			TargetHum.Health = 0.5
 		else
@@ -1555,13 +1355,7 @@ local function FireWeaponAtTarget()
 		ReplicatedStorage.MainBindedEvent:Fire("DamageIndicatorText", TotalDamage, BasePosition, true, false)
 	end
 
-	ReplicatedStorage.MainEvent:FireServer("Shoot", {
-		RayHitTable,
-		OffsetTable,
-		OriginPosition,
-		BasePosition,
-		ServerTime
-	})
+	ReplicatedStorage.MainEvent:FireServer("Shoot", { RayHitTable, OffsetTable, OriginPosition, BasePosition, ServerTime })
 end
 
 local function StartFiringLoop()
@@ -1572,26 +1366,21 @@ local function StartFiringLoop()
 	end
 end
 
--- RakNet Packets
 local function RakHook(packet)
 	if packet.PacketId == 0x1B then
 		local data = packet.AsBuffer
-
 		if SpoofActive then
-			local maxOffset = math.max(Config.X, Config.Y, Config.Z)
-
+			local maxOffset = math.max(Config.X or 1, Config.Y or 1, Config.Z or 1)
 			if buffer.len(data) > maxOffset + 4 then
 				buffer.writeu8(data, 25, 1)
-				buffer.writef32(data, Config.X, 0.0)
-				buffer.writef32(data, Config.Y, 65.0)
-				buffer.writef32(data, Config.Z, 0.0)
+				buffer.writef32(data, Config.X or 1, 0.0)
+				buffer.writef32(data, Config.Y or 1, 65.0)
+				buffer.writef32(data, Config.Z or 1, 0.0)
 			end
 		end
-
 		if RakActive then
 			buffer.writeu32(data, 1, 0xFFFFFFFF)
 		end
-
 		packet:SetData(data)
 	end
 end
@@ -1600,43 +1389,28 @@ if raknet and raknet.add_send_hook then
 	raknet.add_send_hook(RakHook)
 end
 
--- Desync POST-SIMULATION Loop
 RunService.PostSimulation:Connect(function()
 	if DesyncActive and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
 		Sleeping = not Sleeping
-
 		if sethiddenproperty then
-			sethiddenproperty(
-				LocalPlayer.Character.HumanoidRootPart,
-				"NetworkIsSleeping",
-				Sleeping
-			)
+			sethiddenproperty(LocalPlayer.Character.HumanoidRootPart, "NetworkIsSleeping", Sleeping)
 		end
 	end
 end)
 
--- Auto Reload monitoring loop
 RunService.Heartbeat:Connect(function()
-	if AutoReloadActive then
-		AutoReload()
-	end
+	if AutoReloadActive then AutoReload() end
 end)
-
-----------------------------------------------------------------------
--- UI Menu Synchronizers
-----------------------------------------------------------------------
 
 local function updateToggleVisuals()
 	if ForceHitTextEnabled then
 		CheckboxBox.BackgroundColor3 = Color3.fromRGB(215, 60, 60)
 		CheckboxLabel.TextColor3 = Color3.fromRGB(230, 230, 230)
-		if ForceHitActive and LockedTarget then HUDFrame.Visible = true end
 	else
 		CheckboxBox.BackgroundColor3 = Color3.fromRGB(22, 22, 22)
 		CheckboxLabel.TextColor3 = Color3.fromRGB(145, 145, 145)
 		HUDFrame.Visible = false
 	end
-	
 	if AutoReloadActive then
 		AutoReloadBox.BackgroundColor3 = Color3.fromRGB(215, 60, 60)
 		AutoReloadLabel.TextColor3 = Color3.fromRGB(230, 230, 230)
@@ -1654,7 +1428,6 @@ local function UpdateHvHVisuals()
 		SpoofBox.BackgroundColor3 = Color3.fromRGB(22, 22, 22)
 		SpoofLabelBtn.TextColor3 = Color3.fromRGB(145, 145, 145)
 	end
-
 	if RakTextEnabled then
 		RakBox.BackgroundColor3 = Color3.fromRGB(215, 60, 60)
 		RakLabelBtn.TextColor3 = Color3.fromRGB(230, 230, 230)
@@ -1662,7 +1435,6 @@ local function UpdateHvHVisuals()
 		RakBox.BackgroundColor3 = Color3.fromRGB(22, 22, 22)
 		RakLabelBtn.TextColor3 = Color3.fromRGB(145, 145, 145)
 	end
-
 	if DesyncTextEnabled then
 		DesyncBox.BackgroundColor3 = Color3.fromRGB(215, 60, 60)
 		DesyncLabelBtn.TextColor3 = Color3.fromRGB(230, 230, 230)
@@ -1672,18 +1444,9 @@ local function UpdateHvHVisuals()
 	end
 end
 
-----------------------------------------------------------------------
--- Runtime Environment Update Heartbeats
-----------------------------------------------------------------------
-
 RunService.Heartbeat:Connect(function()
 	if not ForceHitActive or not LockedTarget then
-		if ForceHitTextEnabled then
-			SetNoTarget()
-		else
-			Beam.Enabled = false
-			HUDFrame.Visible = false
-		end
+		if ForceHitTextEnabled then SetNoTarget() else Beam.Enabled = false; HUDFrame.Visible = false end
 		return
 	end
 	
@@ -1695,12 +1458,7 @@ RunService.Heartbeat:Connect(function()
 	if not hum or not targetRoot then
 		LockedTarget = nil
 		IsFiring = false
-		if ForceHitTextEnabled then
-			SetNoTarget()
-		else
-			Beam.Enabled = false
-			HUDFrame.Visible = false
-		end
+		if ForceHitTextEnabled then SetNoTarget() else Beam.Enabled = false; HUDFrame.Visible = false end
 		return
 	end
 
@@ -1708,12 +1466,7 @@ RunService.Heartbeat:Connect(function()
 	if not player then
 		LockedTarget = nil
 		IsFiring = false
-		if ForceHitTextEnabled then
-			SetNoTarget()
-		else
-			Beam.Enabled = false
-			HUDFrame.Visible = false
-		end
+		if ForceHitTextEnabled then SetNoTarget() else Beam.Enabled = false; HUDFrame.Visible = false end
 		return
 	end
 
@@ -1723,14 +1476,11 @@ RunService.Heartbeat:Connect(function()
 			AvatarImage.Image = "rbxthumb://type=AvatarHeadShot&id=" .. player.UserId .. "&w=150&h=150"
 			LastTrackedUserId = player.UserId
 		end
-
 		NameLabel.Text = "  " .. player.DisplayName .. " (@" .. player.Name .. ")"
 		NameLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-
 		if MyTorso then
 			DistanceLabel.Text = "   " .. math.floor((targetRoot.Position - MyTorso.Position).Magnitude) .. " studs"
 		end
-
 		local healthPct = math.clamp(hum.Health / hum.MaxHealth, 0, 1)
 		TweenService:Create(HealthBar, TweenInfo.new(0.1), { Size = UDim2.new(healthPct, 0, 1, 0) }):Play()
 	else
@@ -1739,41 +1489,26 @@ RunService.Heartbeat:Connect(function()
 
 	local MouseRay = Camera:ScreenPointToRay(Mouse.X, Mouse.Y)
 	local MouseWorldPos = MouseRay.Origin + MouseRay.Direction * 20
-
 	BeamPartA.CFrame = CFrame.new(MouseWorldPos)
 	BeamPartB.CFrame = CFrame.new(targetRoot.Position)
 	Beam.Enabled = true
 end)
 
-----------------------------------------------------------------------
--- User Input Connection Interceptors (TOGGLE VERSION)
-----------------------------------------------------------------------
-
 UserInputService.InputBegan:Connect(function(Input, GameProcessed)
 	if GameProcessed then return end
 
-	-- Menu toggle
 	if Input.KeyCode == MenuToggleKey then
 		Frame.Visible = not Frame.Visible
 		return
 	end
 	
-	-- Fly Toggle Key (press to toggle on/off)
-	if Input.KeyCode == FlyToggleKey and not IsBinding then
-		toggleFly()
-	end
-	
-	-- Speed Toggle Key (press to toggle on/off)
-	if Input.KeyCode == SpeedToggleKey and not IsBinding then
-		toggleSpeed()
-	end
+	if Input.KeyCode == FlyToggleKey and not IsBinding then ToggleFly() end
+	if Input.KeyCode == SpeedToggleKey and not IsBinding then ToggleSpeed() end
 
-	-- Key Rebinding Mechanics Matrix
 	if IsBinding and BindingTarget then
 		if Input.UserInputType == Enum.UserInputType.Keyboard then
 			local chosenKey = Input.KeyCode
 			IsBinding = false
-
 			if BindingTarget == "ForceHit" then
 				ActivationKey = chosenKey
 				KeybindBtn.Text = string.lower(chosenKey.Name)
@@ -1790,12 +1525,6 @@ UserInputService.InputBegan:Connect(function(Input, GameProcessed)
 				Config.DesyncKey = chosenKey
 				DesyncBindBtn.Text = string.lower(chosenKey.Name)
 				DesyncBindBtn.TextColor3 = Color3.fromRGB(130, 130, 130)
-			elseif BindingTarget == "FlySpeed" then
-				local num = tonumber(chosenKey.Name)
-				if num then UpdateFlySpeed(num) end
-			elseif BindingTarget == "SpeedMult" then
-				local num = tonumber(chosenKey.Name)
-				if num then UpdateSpeedMultiplier(num) end
 			elseif BindingTarget == "FlyKeybind" then
 				FlyToggleKey = chosenKey
 				FlyKeybindBtn.Text = string.upper(chosenKey.Name)
@@ -1811,51 +1540,34 @@ UserInputService.InputBegan:Connect(function(Input, GameProcessed)
 		return
 	end
 
-	-- Force Hit Core Key Trigger
 	if Input.KeyCode == ActivationKey then
 		ForceHitActive = not ForceHitActive
 		if ForceHitActive then
-			local closest, _ = GetPlayerClosestToMouse()
+			local closest = GetPlayerClosestToMouse()
 			if closest then
 				LockedTarget = closest
-				if not IsFiring then
-					task.spawn(StartFiringLoop)
-				end
+				if not IsFiring then task.spawn(StartFiringLoop) end
 			end
 		else
 			LockedTarget = nil
 			IsFiring = false
-			if ForceHitTextEnabled then
-				SetNoTarget()
-			else
-				Beam.Enabled = false
-				HUDFrame.Visible = false
-			end
+			if ForceHitTextEnabled then SetNoTarget() else Beam.Enabled = false; HUDFrame.Visible = false end
 		end
 	end
 
-	-- Spoof Core Key Trigger
 	if Input.KeyCode == Config.SpoofKey then
 		SpoofActive = not SpoofActive
 		UpdateLabels()
 	end
-
-	-- RakNet Core Key Trigger
 	if Input.KeyCode == Config.RakKey then
 		RakActive = not RakActive
 		UpdateLabels()
 	end
-
-	-- Desync Core Key Trigger
 	if Input.KeyCode == Config.DesyncKey then
 		DesyncActive = not DesyncActive
 		UpdateLabels()
 	end
 end)
-
-----------------------------------------------------------------------
--- UI Interactive Connection Interceptors
-----------------------------------------------------------------------
 
 local function toggleForceHitText()
 	ForceHitTextEnabled = not ForceHitTextEnabled
@@ -1892,85 +1604,6 @@ RakBindBtn.MouseButton1Click:Connect(function() IsBinding = true; BindingTarget 
 DesyncBox.MouseButton1Click:Connect(function() DesyncTextEnabled = not DesyncTextEnabled; UpdateLabels(); UpdateHvHVisuals(); SaveConfig() end)
 DesyncLabelBtn.MouseButton1Click:Connect(function() DesyncTextEnabled = not DesyncTextEnabled; UpdateLabels(); UpdateHvHVisuals(); SaveConfig() end)
 DesyncBindBtn.MouseButton1Click:Connect(function() IsBinding = true; BindingTarget = "Desync"; DesyncBindBtn.Text = "..."; DesyncBindBtn.TextColor3 = Color3.fromRGB(215, 60, 60) end)
-
-----------------------------------------------------------------------
--- Tab Navigation Module
-----------------------------------------------------------------------
-
-local tabButtons = {
-	TextButton_2, 
-	TextButton_3, 
-	TextButton_5, 
-	TextButton_7, 
-	TextButton_8, 
-	TextButton_9, 
-	TextButton_10 
-}
-
-local buttonPages = {
-	[TextButton_2] = Frame_11,
-	[TextButton_3] = Frame_11,
-	[TextButton_5] = Frame_13,
-	[TextButton_7] = Frame_15,
-	[TextButton_8] = Frame_15,
-	[TextButton_9] = Frame_15,
-	[TextButton_10] = Frame_15,
-}
-
-local selectedButton = nil
-local SOFT_RED = Color3.fromRGB(215, 60, 60)
-local GRAY_TEXT = Color3.fromRGB(95, 90, 90)
-
-local function updateButtonVisuals(button, state)
-	if state == "Selected" or state == "Hover" then
-		button.TextColor3 = SOFT_RED
-		button.TextStrokeColor3 = SOFT_RED
-		button.TextStrokeTransparency = 0.75
-	else
-		button.TextColor3 = GRAY_TEXT
-		button.TextStrokeTransparency = 1
-	end
-end
-
-local function updatePageVisibility()
-	Frame_11.Visible = false
-	Frame_13.Visible = false
-	Frame_15.Visible = false
-
-	if selectedButton and buttonPages[selectedButton] then
-		buttonPages[selectedButton].Visible = true
-	end
-end
-
-for _, button in ipairs(tabButtons) do
-	button.BackgroundTransparency = 1
-
-	button.MouseEnter:Connect(function()
-		if selectedButton ~= button then
-			updateButtonVisuals(button, "Hover")
-		end
-	end)
-
-	button.MouseLeave:Connect(function()
-		if selectedButton ~= button then
-			updateButtonVisuals(button, "Normal")
-		end
-	end)
-
-	button.MouseButton1Click:Connect(function()
-		if selectedButton and selectedButton ~= button then
-			updateButtonVisuals(selectedButton, "Normal")
-		end
-
-		selectedButton = button
-		updateButtonVisuals(button, "Selected")
-		updatePageVisibility()
-	end)
-end
-
-----------------------------------------------------------------------
--- Runtime Environment Load Sequence
-----------------------------------------------------------------------
 
 LoadConfig()
 updateToggleVisuals()
