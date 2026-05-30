@@ -2059,14 +2059,9 @@ end
 Players.PlayerAdded:Connect(onPlayerAdded)
 Players.PlayerRemoving:Connect(onPlayerRemoving)
 
-print("[FazeWare] ESP system loaded (Juju-style) - Use the UI buttons to toggle")
 
---========================================================--
--- ESP UI BUTTONS (added to Visuals tab + Players section)
--- No keybinds - pure button toggles
---========================================================--
 
--- Helper to create a toggle button (matches existing style in the script)
+
 local function CreateESPToggle(parent, yOffset, labelText, defaultState, onToggle)
     local row = Instance.new("Frame")
     row.Name = labelText:gsub(" ", "") .. "Row"
@@ -2232,3 +2227,141 @@ end
 task.delay(1, function()
     -- You can expand this if you want the buttons to reflect current state
 end)
+
+--========================================================--
+-- CLEAN ESP UI FIX (appended)
+-- This creates the sections in Visuals and Players tabs
+--========================================================--
+
+local function CreateCleanESPToggle(parent, yOffset, labelText, defaultState, onToggle)
+    local row = Instance.new("Frame")
+    row.Name = labelText:gsub(" ", "") .. "Row"
+    row.Parent = parent
+    row.BackgroundTransparency = 1
+    row.Position = UDim2.new(0, 12, 0, yOffset)
+    row.Size = UDim2.new(1, -24, 0, 22)
+
+    local box = Instance.new("TextButton")
+    box.Name = "CheckboxBox"
+    box.Parent = row
+    box.BackgroundColor3 = defaultState and Color3.fromRGB(215, 60, 60) or Color3.fromRGB(22, 22, 22)
+    box.BorderSizePixel = 0
+    box.Position = UDim2.new(0, 0, 0.5, -5)
+    box.Size = UDim2.new(0, 10, 0, 10)
+    box.Text = ""
+    box.AutoButtonColor = false
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(55, 55, 55)
+    stroke.Thickness = 1
+    stroke.Parent = box
+
+    local label = Instance.new("TextButton")
+    label.Name = "CheckboxLabel"
+    label.Parent = row
+    label.BackgroundTransparency = 1
+    label.Position = UDim2.new(0, 16, 0, 0)
+    label.Size = UDim2.new(1, -16, 1, 0)
+    label.Font = Enum.Font.SourceSans
+    label.Text = labelText
+    label.TextColor3 = defaultState and Color3.fromRGB(230, 230, 230) or Color3.fromRGB(145, 145, 145)
+    label.TextSize = 13
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.AutoButtonColor = false
+
+    local enabled = defaultState
+
+    local function UpdateVisual()
+        box.BackgroundColor3 = enabled and Color3.fromRGB(215, 60, 60) or Color3.fromRGB(22, 22, 22)
+        label.TextColor3 = enabled and Color3.fromRGB(230, 230, 230) or Color3.fromRGB(145, 145, 145)
+    end
+
+    local function Toggle()
+        enabled = not enabled
+        UpdateVisual()
+        if onToggle then onToggle(enabled) end
+    end
+
+    box.MouseButton1Click:Connect(Toggle)
+    label.MouseButton1Click:Connect(Toggle)
+
+    UpdateVisual()
+
+    return { Set = function(s) enabled = s; UpdateVisual(); if onToggle then onToggle(enabled) end end }
+end
+
+-- Visuals Tab ESP Section (right under the "- visuals" label)
+if Frame_14 then
+    local g = Instance.new("Frame")
+    g.Name = "ESP_Section"
+    g.Parent = Frame_14
+    g.BackgroundColor3 = Color3.fromRGB(13,13,13)
+    g.BorderSizePixel = 0
+    g.Position = UDim2.new(0, 12, 0, 25)
+    g.Size = UDim2.new(0, 240, 0, 145)
+
+    Instance.new("UICorner", g).CornerRadius = UDim.new(0,8)
+
+    local tl = Instance.new("Frame", g)
+    tl.Name = "TopLine"
+    tl.BackgroundColor3 = Color3.fromRGB(40,40,40)
+    tl.BorderSizePixel = 0
+    tl.Position = UDim2.new(0,10,0,0)
+    tl.Size = UDim2.new(1,-20,0,1)
+
+    local t = Instance.new("TextLabel", g)
+    t.BackgroundTransparency = 1
+    t.Position = UDim2.new(0,12,0,6)
+    t.Size = UDim2.new(0,100,0,14)
+    t.Font = Enum.Font.SourceSans
+    t.Text = "esp"
+    t.TextColor3 = Color3.fromRGB(200,200,200)
+    t.TextSize = 12
+    t.TextXAlignment = Enum.TextXAlignment.Left
+
+    local y = 26
+    CreateCleanESPToggle(g, y, "Enabled", false, function(v) ESP.Enabled = v end) y+=22
+    CreateCleanESPToggle(g, y, "Box", true, function(v) ESP.Box = v end) y+=22
+    CreateCleanESPToggle(g, y, "Name + Distance", true, function(v) ESP.Name = v end) y+=22
+    CreateCleanESPToggle(g, y, "Highlight (Chams)", true, function(v) ESP.Highlight = v end) y+=22
+    CreateCleanESPToggle(g, y, "Tracers", false, function(v) ESP.Tracers = v end)
+end
+
+-- Players Tab ESP Section
+local pFrame = Frame_16 or Frame_15
+if pFrame then
+    local g = Instance.new("Frame")
+    g.Name = "Players_ESP_Section"
+    g.Parent = pFrame
+    g.BackgroundColor3 = Color3.fromRGB(13,13,13)
+    g.BorderSizePixel = 0
+    g.Position = UDim2.new(0, 12, 0, 25)
+    g.Size = UDim2.new(0, 240, 0, 120)
+
+    Instance.new("UICorner", g).CornerRadius = UDim.new(0,8)
+
+    local tl = Instance.new("Frame", g)
+    tl.Name = "TopLine"
+    tl.BackgroundColor3 = Color3.fromRGB(40,40,40)
+    tl.BorderSizePixel = 0
+    tl.Position = UDim2.new(0,10,0,0)
+    tl.Size = UDim2.new(1,-20,0,1)
+
+    local t = Instance.new("TextLabel", g)
+    t.BackgroundTransparency = 1
+    t.Position = UDim2.new(0,12,0,6)
+    t.Size = UDim2.new(0,150,0,14)
+    t.Font = Enum.Font.SourceSans
+    t.Text = "esp (players)"
+    t.TextColor3 = Color3.fromRGB(200,200,200)
+    t.TextSize = 12
+    t.TextXAlignment = Enum.TextXAlignment.Left
+
+    local y = 26
+    CreateCleanESPToggle(g, y, "Enabled", false, function(v) ESP.Enabled = v end) y+=22
+    CreateCleanESPToggle(g, y, "Box", true, function(v) ESP.Box = v end) y+=22
+    CreateCleanESPToggle(g, y, "Name", true, function(v) ESP.Name = v end) y+=22
+    CreateCleanESPToggle(g, y, "Highlight", true, function(v) ESP.Highlight = v end)
+end
+
+print("[FazeWare] ESP UI sections added to Visuals and Players tabs")
