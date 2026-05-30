@@ -1,4 +1,11 @@
+-- before saying anything pls sybau i didnt try at all and i made ts fast
+warn("starting juju")
+repeat task["wait"]() until game:IsLoaded()
 
+-- [Luraph initialization removed by user request]
+
+
+-- > ( global cheat variables )
 
 local user_input_service = cloneref(game:GetService("UserInputService"))
     local get_mouse_location = user_input_service["GetMouseLocation"]
@@ -8045,17 +8052,12 @@ local files = {
     end
 end
 
+
 --========================================================--
---  FAZEWARE FORCEHIT + DESYNC INJECTED BELOW
---  This section was merged into the Juju UI Only script.
---========================================================--
---========================================================--
---  FAZEWARE ADDON - ForceHit + Classic Desync
---  Injected into Juju UI Only
---  Ready for GitHub + loadstring
+--  FAZEWARE FORCEHIT + CLASSIC DESYNC (Luraph-free addon)
 --========================================================--
 
-task.wait(2.8) -- Wait for Juju UI + ESP to fully load
+task.wait(2.5)
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -8066,44 +8068,30 @@ local LocalPlayer = Players.LocalPlayer
 local Mouse = LocalPlayer:GetMouse()
 local Camera = workspace.CurrentCamera
 
---==================== FORCEHIT ====================--
-local ForceHit = {
-    Active = false,
-    Target = nil,
-    Firing = false,
-    Key = Enum.KeyCode.C
-}
+--// ForceHit
+local ForceHit = { Active = false, Target = nil, Firing = false, Key = Enum.KeyCode.C }
 
-local function HasFF(char)
-    return char and char:FindFirstChildOfClass("ForceField") ~= nil
-end
+local function HasFF(c) return c and c:FindFirstChildOfClass("ForceField") ~= nil end
 
-local function GetClosestTarget()
-    local mousePos = Vector2.new(Mouse.X, Mouse.Y)
+local function GetClosest()
+    local mp = Vector2.new(Mouse.X, Mouse.Y)
     local char = LocalPlayer.Character
-    local myTorso = char and char:FindFirstChild("UpperTorso")
-    if not myTorso then return nil end
-
-    local best, bestDist = nil, math.huge
-
-    for _, plr in ipairs(Players:GetPlayers()) do
-        if plr ~= LocalPlayer and plr.Character then
-            local head = plr.Character:FindFirstChild("Head")
-            local hum = plr.Character:FindFirstChildOfClass("Humanoid")
-            local be = plr.Character:FindFirstChild("BodyEffects")
-            local ko = be and be:FindFirstChild("K.O") and be["K.O"].Value
-
-            if head and hum and hum.Health > 0 and not ko then
-                local sp, onScreen = Camera:WorldToScreenPoint(head.Position)
-                if onScreen then
-                    local dist = (Vector2.new(sp.X, sp.Y) - mousePos).Magnitude
-                    if dist < bestDist then
-                        local wDist = (head.Position - myTorso.Position).Magnitude
-                        local ray = workspace:Raycast(myTorso.Position, (head.Position - myTorso.Position).Unit * wDist, 
-                            RaycastParams.new():SetFilter({workspace.Ignored, workspace.Players, char}))
-                        if not ray then
-                            bestDist = dist
-                            best = plr.Character
+    local mt = char and char:FindFirstChild("UpperTorso")
+    if not mt then return nil end
+    local best, bd = nil, math.huge
+    for _,p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and p.Character then
+            local h = p.Character:FindFirstChild("Head")
+            local hum = p.Character:FindFirstChildOfClass("Humanoid")
+            local be = p.Character:FindFirstChild("BodyEffects")
+            if h and hum and hum.Health > 0 and not (be and be:FindFirstChild("K.O") and be["K.O"].Value) then
+                local sp, on = Camera:WorldToScreenPoint(h.Position)
+                if on then
+                    local d = (Vector2.new(sp.X, sp.Y) - mp).Magnitude
+                    if d < bd then
+                        local wd = (h.Position - mt.Position).Magnitude
+                        if not workspace:Raycast(mt.Position, (h.Position-mt.Position).Unit*wd, RaycastParams.new():SetFilter({workspace.Ignored, workspace.Players, char})) then
+                            bd = d; best = p.Character
                         end
                     end
                 end
@@ -8113,198 +8101,90 @@ local function GetClosestTarget()
     return best
 end
 
-local function ShootTarget()
+local function Shoot()
     if not ForceHit.Active or not ForceHit.Target then return end
-
     local char = LocalPlayer.Character
     local tool = char and char:FindFirstChildOfClass("Tool")
     if not tool or HasFF(ForceHit.Target) then return end
-
     local handle = tool:FindFirstChild("Handle")
-    local script = tool:FindFirstChild("Script")
-    local ammo = script and script:FindFirstChild("Ammo") and script.Ammo:FindFirstChild("CLIENT")
-
-    if ammo and ammo.Value <= 0 then
-        if handle and handle:FindFirstChild("NoAmmo") then handle.NoAmmo:Play() end
-        return
-    end
-
+    local sc = tool:FindFirstChild("Script")
+    local ammo = sc and sc:FindFirstChild("Ammo") and sc.Ammo:FindFirstChild("CLIENT")
+    if ammo and ammo.Value <= 0 then if handle and handle:FindFirstChild("NoAmmo") then handle.NoAmmo:Play() end return end
     local be = char:FindFirstChild("BodyEffects")
     if be and be:FindFirstChild("Reloading_CLIENT") and be.Reloading_CLIENT.Value then return end
-
-    local isShotgun = tool.Name:find("Shotgun") or tool.Name:find("DoubleBarrel")
-    local myRoot = char:FindFirstChild("HumanoidRootPart")
-    local myTorso = char:FindFirstChild("UpperTorso")
-    if not myTorso or not myRoot then return end
-
-    local tgtRoot = ForceHit.Target:FindFirstChild("HumanoidRootPart")
-    local tgtHum = ForceHit.Target:FindFirstChildOfClass("Humanoid")
-    if not tgtRoot or not tgtHum or tgtHum.Health <= 0 then return end
-
-    local basePos = tgtRoot.Position
-    local origin = handle and handle.Position or myRoot.Position
-    local sTime = workspace:GetServerTimeNow()
-
+    local isSG = tool.Name:find("Shotgun") or tool.Name:find("DoubleBarrel")
+    local mr, mt = char:FindFirstChild("HumanoidRootPart"), char:FindFirstChild("UpperTorso")
+    if not mt or not mr then return end
+    local tr = ForceHit.Target:FindFirstChild("HumanoidRootPart")
+    local th = ForceHit.Target:FindFirstChildOfClass("Humanoid")
+    if not tr or not th or th.Health <= 0 then return end
+    local bp, op, st = tr.Position, handle and handle.Position or mr.Position, workspace:GetServerTimeNow()
     if ammo then ammo.Value -= 1 end
-
-    if handle and handle:FindFirstChild("Shoot") then
-        local s = handle.Shoot:Clone()
-        game:GetService("Debris"):AddItem(s, 1.2)
-        s.Parent = handle
-        s:Play()
-    end
-
-    local hits, offs = {}, {}
-    local spreads = {-1.35, -0.9, 0.25, 0.55, 1}
-    local count = isShotgun and 5 or 1
-
-    local rng = Random.new(sTime)
-    local rot = CFrame.Angles(0, 0, math.rad(rng:NextNumber(-90, 90)))
-    local spread = rng:NextNumber(0, 5.75) * (rng:NextInteger(0,1)==1 and 1 or -1)
-    if spread > -0.35 and spread < 0.35 then spread = 0.35 end
-
-    for i = 1, count do
-        local pos = basePos
-        if isShotgun then
-            local ang = spreads[i] * spread
-            pos = origin + ((CFrame.new(origin, basePos) * rot * CFrame.Angles(math.rad(ang),0,0)).LookVector * (basePos - origin).Magnitude)
+    if handle and handle:FindFirstChild("Shoot") then local s=handle.Shoot:Clone(); game:GetService("Debris"):AddItem(s,1); s.Parent=handle; s:Play() end
+    local hits,offs = {},{}
+    local spreads = {-1.35,-0.9,0.25,0.55,1}
+    local cnt = isSG and 5 or 1
+    local rng = Random.new(st)
+    local rot = CFrame.Angles(0,0,math.rad(rng:NextNumber(-90,90)))
+    local sp = rng:NextNumber(0,5.75) * (rng:NextInteger(0,1)==1 and 1 or -1); if sp>-0.35 and sp<0.35 then sp=0.35 end
+    for i=1,cnt do
+        local pos = bp
+        if isSG then
+            local ang = spreads[i]*sp
+            pos = op + ((CFrame.new(op,bp)*rot*CFrame.Angles(math.rad(ang),0,0)).LookVector * (bp-op).Magnitude)
         end
-        local n = (origin - pos).Unit
-        table.insert(hits, {Instance = tgtRoot, Position = pos, Normal = n})
-        table.insert(offs, {thePart = tgtRoot, theOffset = tgtRoot.CFrame:PointToObjectSpace(pos)})
+        local n = (op-pos).Unit
+        table.insert(hits, {Instance=tr, Position=pos, Normal=n})
+        table.insert(offs, {thePart=tr, theOffset=tr.CFrame:PointToObjectSpace(pos)})
     end
-
-    if tgtHum then
-        local dmg = (tool.Name == "[DoubleBarrel]") and 14 or 20
-        local total = isShotgun and dmg*5 or dmg
-        if tgtHum.Health - total < 0.5 then tgtHum.Health = 0.5 else tgtHum:TakeDamage(total) end
-        pcall(function() ReplicatedStorage.MainBindedEvent:Fire("DamageIndicatorText", total, basePos, true, false) end)
+    if th then
+        local dmg = tool.Name=="[DoubleBarrel]" and 14 or 20
+        local tot = isSG and dmg*5 or dmg
+        if th.Health-tot < 0.5 then th.Health=0.5 else th:TakeDamage(tot) end
+        pcall(function() ReplicatedStorage.MainBindedEvent:Fire("DamageIndicatorText",tot,bp,true,false) end)
     end
-
-    ReplicatedStorage.MainEvent:FireServer("Shoot", {hits, offs, origin, basePos, sTime})
+    ReplicatedStorage.MainEvent:FireServer("Shoot",{hits,offs,op,bp,st})
 end
 
-local function ForceHitLoop()
-    ForceHit.Firing = true
-    while ForceHit.Active and ForceHit.Target and ForceHit.Firing do
-        ShootTarget()
-        task.wait(0.27)
-    end
-    ForceHit.Firing = false
-end
+local function Loop() ForceHit.Firing=true; while ForceHit.Active and ForceHit.Target and ForceHit.Firing do Shoot(); task.wait(0.28) end; ForceHit.Firing=false end
 
--- Simple Drawing HUD
-local HUD = {
-    Box = Drawing.new("Square"),
-    Out = Drawing.new("Square"),
-    Name = Drawing.new("Text"),
-    Dist = Drawing.new("Text"),
-    Tag = Drawing.new("Text")
-}
-
-do
-    local h = HUD
-    h.Out.Visible = false; h.Out.Color = Color3.new(); h.Out.Thickness = 3
-    h.Box.Visible = false; h.Box.Color = Color3.fromRGB(255,55,55); h.Box.Thickness = 1.5
-    h.Name.Visible = false; h.Name.Size = 16; h.Name.Center = true; h.Name.Outline = true
-    h.Dist.Visible = false; h.Dist.Size = 14; h.Dist.Center = true; h.Dist.Outline = true
-    h.Tag.Visible = false; h.Tag.Size = 13; h.Tag.Center = true; h.Tag.Outline = true; h.Tag.Text = "FORCE HIT"; h.Tag.Color = Color3.fromRGB(255,80,80)
-end
+local HUD = {Box=Drawing.new("Square"),Out=Drawing.new("Square"),Nm=Drawing.new("Text"),Ds=Drawing.new("Text"),Tg=Drawing.new("Text")}
+do local h=HUD; h.Out.Visible=false; h.Out.Color=Color3.new(); h.Out.Thickness=3; h.Box.Visible=false; h.Box.Color=Color3.fromRGB(255,55,55); h.Box.Thickness=1.5; h.Nm.Visible=false; h.Nm.Size=16; h.Nm.Center=true; h.Nm.Outline=true; h.Ds.Visible=false; h.Ds.Size=14; h.Ds.Center=true; h.Ds.Outline=true; h.Tg.Visible=false; h.Tg.Size=13; h.Tg.Center=true; h.Tg.Outline=true; h.Tg.Text="FORCE HIT"; h.Tg.Color=Color3.fromRGB(255,80,80) end
 
 RunService.RenderStepped:Connect(function()
-    local h = HUD
-    if not ForceHit.Active or not ForceHit.Target then
-        h.Box.Visible = h.Out.Visible = h.Name.Visible = h.Dist.Visible = h.Tag.Visible = false
-        return
-    end
-
-    local root = ForceHit.Target:FindFirstChild("HumanoidRootPart")
-    local head = ForceHit.Target:FindFirstChild("Head")
-    if not root or not head then return end
-
-    local pos, vis = Camera:WorldToViewportPoint(head.Position)
-    if not vis then
-        h.Box.Visible = h.Out.Visible = h.Name.Visible = h.Dist.Visible = h.Tag.Visible = false
-        return
-    end
-
-    local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    local d = myRoot and math.floor((myRoot.Position - root.Position).Magnitude) or 0
-    local plr = Players:GetPlayerFromCharacter(ForceHit.Target)
-
-    h.Name.Text = plr and plr.Name or "?"
-    h.Name.Position = Vector2.new(pos.X, pos.Y - 40)
-    h.Name.Visible = true
-
-    h.Dist.Text = d .. " studs"
-    h.Dist.Position = Vector2.new(pos.X, pos.Y - 23)
-    h.Dist.Visible = true
-
-    h.Tag.Position = Vector2.new(pos.X, pos.Y - 7)
-    h.Tag.Visible = true
-
-    local sz = Vector2.new(70, 85)
-    local p = Vector2.new(pos.X - sz.X/2, pos.Y - 50)
-    h.Box.Size, h.Box.Position, h.Box.Visible = sz, p, true
-    h.Out.Size, h.Out.Position, h.Out.Visible = sz, p, true
+    local h=HUD; if not ForceHit.Active or not ForceHit.Target then h.Box.Visible=h.Out.Visible=h.Nm.Visible=h.Ds.Visible=h.Tg.Visible=false; return end
+    local r = ForceHit.Target:FindFirstChild("HumanoidRootPart"); local hd=ForceHit.Target:FindFirstChild("Head"); if not r or not hd then return end
+    local p,vis = Camera:WorldToViewportPoint(hd.Position); if not vis then h.Box.Visible=h.Out.Visible=h.Nm.Visible=h.Ds.Visible=h.Tg.Visible=false; return end
+    local mr = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    local dist = mr and math.floor((mr.Position-r.Position).Magnitude) or 0
+    local pl = Players:GetPlayerFromCharacter(ForceHit.Target)
+    h.Nm.Text = pl and pl.Name or "?"; h.Nm.Position=Vector2.new(p.X,p.Y-40); h.Nm.Visible=true
+    h.Ds.Text=dist.." studs"; h.Ds.Position=Vector2.new(p.X,p.Y-23); h.Ds.Visible=true
+    h.Tg.Position=Vector2.new(p.X,p.Y-7); h.Tg.Visible=true
+    local sz=Vector2.new(70,85); local pp=Vector2.new(p.X-sz.X/2, p.Y-50)
+    h.Box.Size,h.Box.Position,h.Box.Visible=sz,pp,true
+    h.Out.Size,h.Out.Position,h.Out.Visible=sz,pp,true
 end)
 
---==================== CLASSIC DESYNC ====================--
-local Desync = {
-    Active = false,
-    Key = Enum.KeyCode.X,
-    Sleep = false
-}
-
+--// Desync
+local Des = {Active=false, Key=Enum.KeyCode.X, Sl=false}
 RunService.PostSimulation:Connect(function()
-    if Desync.Active and LocalPlayer.Character then
-        local hrp = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-        if hrp and sethiddenproperty then
-            Desync.Sleep = not Desync.Sleep
-            pcall(function() sethiddenproperty(hrp, "NetworkIsSleeping", Desync.Sleep) end)
-        end
+    if Des.Active and LocalPlayer.Character then
+        local hrp=LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if hrp and sethiddenproperty then Des.Sl=not Des.Sl; pcall(function() sethiddenproperty(hrp,"NetworkIsSleeping",Des.Sl) end) end
     end
 end)
 
---==================== INPUT ====================--
-UserInputService.InputBegan:Connect(function(i, gpe)
-    if gpe then return end
-
-    if i.KeyCode == ForceHit.Key then
-        ForceHit.Active = not ForceHit.Active
-        if ForceHit.Active then
-            local t = GetClosestTarget()
-            if t then
-                ForceHit.Target = t
-                if not ForceHit.Firing then task.spawn(ForceHitLoop) end
-            else
-                ForceHit.Active = false
-            end
-        else
-            ForceHit.Target = nil
-            ForceHit.Firing = false
-        end
+UserInputService.InputBegan:Connect(function(i,g) if g then return end
+    if i.KeyCode==ForceHit.Key then
+        ForceHit.Active=not ForceHit.Active
+        if ForceHit.Active then local t=GetClosest(); if t then ForceHit.Target=t; if not ForceHit.Firing then task.spawn(Loop) end else ForceHit.Active=false end
+        else ForceHit.Target=nil; ForceHit.Firing=false end
     end
-
-    if i.KeyCode == Desync.Key then
-        Desync.Active = not Desync.Active
-    end
+    if i.KeyCode==Des.Key then Des.Active = not Des.Active end
 end)
 
-LocalPlayer.CharacterAdded:Connect(function()
-    task.wait(0.6)
-    ForceHit.Active = false
-    ForceHit.Target = nil
-    ForceHit.Firing = false
-end)
+LocalPlayer.CharacterAdded:Connect(function() task.wait(0.7); ForceHit.Active=false; ForceHit.Target=nil; ForceHit.Firing=false end)
 
-print("[Juju + FazeWare] ForceHit (C) + Desync (X) loaded")
-pcall(function()
-    game:GetService("StarterGui"):SetCore("SendNotification", {
-        Title = "FazeWare Loaded",
-        Text = "ForceHit [C] | Desync [X]",
-        Duration = 4
-    })
-end)
-
---========================================================--
+print("[Juju + FazeWare] Loaded (Luraph removed)")
+pcall(function() game:GetService("StarterGui"):SetCore("SendNotification",{Title="FazeWare", Text="ForceHit [C] | Desync [X]", Duration=5}) end)
