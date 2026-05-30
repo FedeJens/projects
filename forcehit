@@ -1,0 +1,228 @@
+task.wait(3) -- Give the UI time to fully initialize
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+
+local LocalPlayer = Players.LocalPlayer
+local Mouse = LocalPlayer:GetMouse()
+local Camera = workspace.CurrentCamera
+
+--// ==================== FORCEHIT ==================== //
+local ForceHit = {
+    Active = false,
+    Target = nil,
+    Firing = false,
+    Key = Enum.KeyCode.C
+}
+
+local function HasFF(char)
+    return char and char:FindFirstChildOfClass("ForceField") ~= nil
+end
+
+local function GetClosestTarget()
+    local mp = Vector2.new(Mouse.X, Mouse.Y)
+    local char = LocalPlayer.Character
+    local mt = char and char:FindFirstChild("UpperTorso")
+    if not mt then return nil end
+
+    local best, bd = nil, math.huge
+
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and p.Character then
+            local h = p.Character:FindFirstChild("Head")
+            local hum = p.Character:FindFirstChildOfClass("Humanoid")
+            local be = p.Character:FindFirstChild("BodyEffects")
+            local ko = be and be:FindFirstChild("K.O") and be["K.O"].Value
+
+            if h and hum and hum.Health > 0 and not ko then
+                local sp, on = Camera:WorldToScreenPoint(h.Position)
+                if on then
+                    local d = (Vector2.new(sp.X, sp.Y) - mp).Magnitude
+                    if d < bd then
+                        local wd = (h.Position - mt.Position).Magnitude
+                        local rp = RaycastParams.new()
+                        rp.FilterDescendantsInstances = {workspace.Ignored, workspace.Players, char}
+                        if not workspace:Raycast(mt.Position, (h.Position - mt.Position).Unit * wd, rp) then
+                            bd = d
+                            best = p.Character
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return best
+end
+
+local function FireForceHit()
+    if not ForceHit.Active or not ForceHit.Target then return end
+
+    local char = LocalPlayer.Character
+    local tool = char and char:FindFirstChildOfClass("Tool")
+    if not tool or HasFF(ForceHit.Target) then return end
+
+    local handle = tool:FindFirstChild("Handle")
+    local sc = tool:FindFirstChild("Script")
+    local ammo = sc and sc:FindFirstChild("Ammo") and sc.Ammo:FindFirstChild("CLIENT")
+
+    if ammo and ammo.Value <= 0 then
+        if handle and handle:FindFirstChild("NoAmmo") then handle.NoAmmo:Play() end
+        return
+    end
+
+    local be = char:FindFirstChild("BodyEffects")
+    if be and be:FindFirstChild("Reloading_CLIENT") and be.Reloading_CLIENT.Value then return end
+
+    local isSG = tool.Name:find("Shotgun") or tool.Name:find("DoubleBarrel")
+    local mr, mt = char:FindFirstChild("HumanoidRootPart"), char:FindFirstChild("UpperTorso")
+    if not mt or not mr then return end
+
+    local tr = ForceHit.Target:FindFirstChild("HumanoidRootPart")
+    local th = ForceHit.Target:FindFirstChildOfClass("Humanoid")
+    if not tr or not th or th.Health <= 0 then return end
+
+    local bp = tr.Position
+    local op = handle and handle.Position or mr.Position
+    local st = workspace:GetServerTimeNow()
+
+    if ammo then ammo.Value -= 1 end
+
+    if handle and handle:FindFirstChild("Shoot") then
+        local s = handle.Shoot:Clone()
+        game:GetService("Debris"):AddItem(s, 1.2)
+        s.Parent = handle
+        s:Play()
+    end
+
+    local hits, offs = {}, {}
+    local spreads = {-1.35, -0.9, 0.25, 0.55, 1}
+    local cnt = isSG and 5 or 1
+    local rng = Random.new(st)
+    local rot = CFrame.Angles(0, 0, math.rad(rng:NextNumber(-90, 90)))
+    local spread = rng:NextNumber(0, 5.75) * (rng:NextInteger(0, 1) == 1 and 1 or -1)
+    if spread > -0.35 and spread < 0.35 then spread = 0.35 end
+
+    for i = 1, cnt do
+        local pos = bp
+        if isSG then
+            local ang = spreads[i] * spread
+            pos = op + ((CFrame.new(op, bp) * rot * CFrame.Angles(math.rad(ang), 0, 0)).LookVector * (bp - op).Magnitude)
+        end
+        local n = (op - pos).Unit
+        table.insert(hits, {Instance = tr, Position = pos, Normal = n})
+        table.insert(offs, {thePart = tr, theOffset = tr.CFrame:PointToObjectSpace(pos)})
+    end
+
+    if th then
+        local dmg = tool.Name == "[DoubleBarrel]" and 14 or 20
+        local tot = isSG and dmg * 5 or dmg
+        if th.Health - tot < 0.5 then th.Health = 0.5 else th:TakeDamage(tot) end
+        pcall(function() ReplicatedStorage.MainBindedEvent:Fire("DamageIndicatorText", tot, bp, true, false) end)
+    end
+
+    ReplicatedStorage.MainEvent:FireServer("Shoot", {hits, offs, op, bp, st})
+end
+
+local function ForceHitLoop()
+    ForceHit.Firing = true
+    while ForceHit.Active and ForceHit.Target and ForceHit.Firing do
+        FireForceHit()
+        task.wait(0.28)
+    end
+    ForceHit.Firing = false
+end
+
+-- Minimal HUD
+local HUD = {
+    Box = Drawing.new("Square"),
+    Out = Drawing.new("Square"),
+    N = Drawing.new("Text"),
+    D = Drawing.new("Text"),
+    Tag = Drawing.new("Text")
+}
+
+do
+    local h = HUD
+    h.Out.Visible = false; h.Out.Color = Color3.new(); h.Out.Thickness = 3
+    h.Box.Visible = false; h.Box.Color = Color3.fromRGB(255, 60, 60); h.Box.Thickness = 1.5
+    h.N.Visible = false; h.N.Size = 16; h.N.Center = true; h.N.Outline = true
+    h.D.Visible = false; h.D.Size = 14; h.D.Center = true; h.D.Outline = true
+    h.Tag.Visible = false; h.Tag.Size = 13; h.Tag.Center = true; h.Tag.Outline = true
+    h.Tag.Text = "FORCE HIT"; h.Tag.Color = Color3.fromRGB(255, 90, 90)
+end
+
+RunService.RenderStepped:Connect(function()
+    local h = HUD
+    if not ForceHit.Active or not ForceHit.Target then
+        h.Box.Visible = h.Out.Visible = h.N.Visible = h.D.Visible = h.Tag.Visible = false
+        return
+    end
+    local r = ForceHit.Target:FindFirstChild("HumanoidRootPart")
+    local hd = ForceHit.Target:FindFirstChild("Head")
+    if not r or not hd then return end
+    local p, vis = Camera:WorldToViewportPoint(hd.Position)
+    if not vis then
+        h.Box.Visible = h.Out.Visible = h.N.Visible = h.D.Visible = h.Tag.Visible = false
+        return
+    end
+    local mr = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    local dist = mr and math.floor((mr.Position - r.Position).Magnitude) or 0
+    local pl = Players:GetPlayerFromCharacter(ForceHit.Target)
+    h.N.Text = pl and pl.Name or "?"; h.N.Position = Vector2.new(p.X, p.Y - 40); h.N.Visible = true
+    h.D.Text = dist .. " studs"; h.D.Position = Vector2.new(p.X, p.Y - 23); h.D.Visible = true
+    h.Tag.Position = Vector2.new(p.X, p.Y - 7); h.Tag.Visible = true
+    local sz = Vector2.new(68, 82); local pp = Vector2.new(p.X - sz.X/2, p.Y - 48)
+    h.Box.Size, h.Box.Position, h.Box.Visible = sz, pp, true
+    h.Out.Size, h.Out.Position, h.Out.Visible = sz, pp, true
+end)
+
+--// ==================== DESYNC ==================== //
+local Desync = {
+    Active = false,
+    Key = Enum.KeyCode.X,
+    S = false
+}
+
+RunService.PostSimulation:Connect(function()
+    if Desync.Active and LocalPlayer.Character then
+        local hrp = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if hrp and sethiddenproperty then
+            Desync.S = not Desync.S
+            pcall(function() sethiddenproperty(hrp, "NetworkIsSleeping", Desync.S) end)
+        end
+    end
+end)
+
+--// ==================== INPUT ==================== //
+UserInputService.InputBegan:Connect(function(i, g)
+    if g then return end
+
+    if i.KeyCode == ForceHit.Key then
+        ForceHit.Active = not ForceHit.Active
+        if ForceHit.Active then
+            local t = GetClosestTarget()
+            if t then
+                ForceHit.Target = t
+                if not ForceHit.Firing then task.spawn(ForceHitLoop) end
+            else
+                ForceHit.Active = false
+            end
+        else
+            ForceHit.Target = nil
+            ForceHit.Firing = false
+        end
+    end
+
+    if i.KeyCode == Desync.Key then
+        Desync.Active = not Desync.Active
+    end
+end)
+
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(0.6)
+    ForceHit.Active = false
+    ForceHit.Target = nil
+    ForceHit.Firing = false
+end)
