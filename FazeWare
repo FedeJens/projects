@@ -1874,10 +1874,6 @@ updateToggleVisuals()
 UpdateHvHVisuals()
 UpdateLabels()
 
---========================================================--
--- ESP SYSTEM (ported/implemented from Juju style)
--- Added under Visuals tab + Players sections
---========================================================--
 
 local ESP = {
     Enabled = false,
@@ -1888,7 +1884,7 @@ local ESP = {
     Tracers = false
 }
 
-local espObjects = {} -- player -> {box, boxOutline, name, highlight, tracer, etc.}
+local espObjects = {}
 
 local function createESPForPlayer(player)
     if player == LocalPlayer then return end
@@ -1896,7 +1892,6 @@ local function createESPForPlayer(player)
 
     local objects = {}
 
-    -- Box
     if ESP.Box then
         objects.box = Drawing.new("Square")
         objects.box.Thickness = 1
@@ -1911,7 +1906,6 @@ local function createESPForPlayer(player)
         objects.boxOutline.Visible = false
     end
 
-    -- Name + Distance
     if ESP.Name then
         objects.name = Drawing.new("Text")
         objects.name.Size = 13
@@ -1922,7 +1916,6 @@ local function createESPForPlayer(player)
         objects.name.Visible = false
     end
 
-    -- Tracer
     if ESP.Tracers then
         objects.tracer = Drawing.new("Line")
         objects.tracer.Thickness = 1
@@ -1930,7 +1923,6 @@ local function createESPForPlayer(player)
         objects.tracer.Visible = false
     end
 
-    -- Roblox Highlight (Chams)
     if ESP.Highlight then
         objects.highlight = Instance.new("Highlight")
         objects.highlight.FillColor = Color3.fromRGB(255, 100, 100)
@@ -1959,7 +1951,6 @@ local function removeESPForPlayer(player)
     espObjects[player] = nil
 end
 
--- Main ESP Render Loop
 RunService.RenderStepped:Connect(function()
     if not ESP.Enabled then
         for player, objects in pairs(espObjects) do
@@ -2000,7 +1991,6 @@ RunService.RenderStepped:Connect(function()
         local v2Pos = Vector2.new(pos.X - xSize/2, top.Y)
         local size = Vector2.new(xSize, bottom.Y - top.Y)
 
-        -- Box
         if objects.box and ESP.Box then
             objects.box.Size = size
             objects.box.Position = v2Pos
@@ -2011,7 +2001,6 @@ RunService.RenderStepped:Connect(function()
             objects.boxOutline.Visible = onScreen
         end
 
-        -- Name + Distance
         if objects.name and ESP.Name then
             local dist = math.floor((hrp.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude)
             objects.name.Text = player.Name .. " [" .. dist .. "]"
@@ -2019,14 +2008,12 @@ RunService.RenderStepped:Connect(function()
             objects.name.Visible = onScreen
         end
 
-        -- Tracer
         if objects.tracer and ESP.Tracers then
             objects.tracer.From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
             objects.tracer.To = Vector2.new(pos.X, pos.Y)
             objects.tracer.Visible = onScreen
         end
 
-        -- Highlight (Chams)
         if objects.highlight and ESP.Highlight then
             objects.highlight.Adornee = char
             objects.highlight.Enabled = onScreen
@@ -2034,7 +2021,6 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
--- Player management
 local function onPlayerAdded(player)
     if player == LocalPlayer then return end
     createESPForPlayer(player)
@@ -2058,7 +2044,6 @@ end
 
 Players.PlayerAdded:Connect(onPlayerAdded)
 Players.PlayerRemoving:Connect(onPlayerRemoving)
-
 
 
 
@@ -2128,8 +2113,6 @@ local function CreateESPToggle(parent, yOffset, labelText, defaultState, onToggl
     }
 end
 
--- === ADD ESP SECTION TO VISUALS TAB ===
--- Parent to Frame_14 (the content frame for visuals)
 if Frame_14 then
     local ESPGroup = Instance.new("Frame")
     ESPGroup.Name = "ESPGroupbox"
@@ -2163,7 +2146,6 @@ if Frame_14 then
     title.TextSize = 12
     title.TextXAlignment = Enum.TextXAlignment.Left
 
-    -- Create toggles
     local y = 26
     CreateESPToggle(ESPGroup, y, "Enabled", false, function(v) ESP.Enabled = v end)
     y = y + 22
@@ -2176,8 +2158,6 @@ if Frame_14 then
     CreateESPToggle(ESPGroup, y, "Tracers", false, function(v) ESP.Tracers = v end)
 end
 
--- === ADD ESP SECTION TO PLAYERS TAB ===
--- Trying to attach to a players-related frame (Frame_15 or similar)
 local playersContentFrame = Frame_16 or Frame_15 or Frame_14
 
 if playersContentFrame then
@@ -2186,7 +2166,7 @@ if playersContentFrame then
     PlayersESPGroup.Parent = playersContentFrame
     PlayersESPGroup.BackgroundColor3 = Color3.fromRGB(13, 13, 13)
     PlayersESPGroup.BorderSizePixel = 0
-    PlayersESPGroup.Position = UDim2.new(0, 12, 0, 220) -- lower position to avoid overlap
+    PlayersESPGroup.Position = UDim2.new(0, 12, 0, 220)
     PlayersESPGroup.Size = UDim2.new(0, 240, 0, 120)
 
     local corner2 = Instance.new("UICorner")
@@ -2223,15 +2203,9 @@ if playersContentFrame then
     CreateESPToggle(PlayersESPGroup, y2, "Highlight", true, function(v) ESP.Highlight = v end)
 end
 
--- Sync the UI toggles with the ESP table on load
 task.delay(1, function()
-    -- You can expand this if you want the buttons to reflect current state
 end)
 
---========================================================--
--- CLEAN ESP UI FIX (appended)
--- This creates the sections in Visuals and Players tabs
---========================================================--
 
 local function CreateCleanESPToggle(parent, yOffset, labelText, defaultState, onToggle)
     local row = Instance.new("Frame")
@@ -2290,7 +2264,6 @@ local function CreateCleanESPToggle(parent, yOffset, labelText, defaultState, on
     return { Set = function(s) enabled = s; UpdateVisual(); if onToggle then onToggle(enabled) end end }
 end
 
--- Visuals Tab ESP Section (right under the "- visuals" label)
 if Frame_14 then
     local g = Instance.new("Frame")
     g.Name = "ESP_Section"
@@ -2327,7 +2300,6 @@ if Frame_14 then
     CreateCleanESPToggle(g, y, "Tracers", false, function(v) ESP.Tracers = v end)
 end
 
--- Players Tab ESP Section
 local pFrame = Frame_16 or Frame_15
 if pFrame then
     local g = Instance.new("Frame")
@@ -2364,4 +2336,3 @@ if pFrame then
     CreateCleanESPToggle(g, y, "Highlight", true, function(v) ESP.Highlight = v end)
 end
 
-print("[FazeWare] ESP UI sections added to Visuals and Players tabs")
